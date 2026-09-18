@@ -1,6 +1,26 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
 [project]
 name = "vorquel-watch"
-version = "0.0.1"
+version = "0.1.0a1"
 description = "Local-first media analysis core for Vorquel Watch"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "mcp==2.2.0",
+  "supabase==2.31.0",
+]
+
+[project.optional-dependencies]
+transcribe = [
+  "faster-whisper==1.2.1",
+]
+
+[project.scripts]
+vorquel-watch = "vorquel_watch.cli:main"
+vorquel-watch-mcp = "vorquel_watch.mcp_server:main"
+vorquel-watch-worker = "vorquel_watch.worker:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vorquel_watch"]
