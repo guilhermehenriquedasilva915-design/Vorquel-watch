@@ -163,7 +163,7 @@ class WatchRepository:
             "pipeline_version": self.settings.pipeline_version,
             "config_hash": config_hash,
             "language_hint": language_hint,
-            "resume_capable": True,
+            "resume_capable": False,
         }
         try:
             result = self.client.table("processing_jobs").insert(payload).execute()
