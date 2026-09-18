@@ -1,0 +1,2 @@
+-- Intentionally empty.
+-- Production-like transcripts/media must not be committed as seed data.
