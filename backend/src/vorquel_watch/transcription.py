@@ -165,6 +165,4 @@ def persist_transcription(
         transcript_id=transcript["transcript_id"],
         segment_count=transcript["segment_count"],
         word_count=transcript["word_count"],
-        source_id=transcript["source_id"],
-        job_id=transcript["job_id"],
     )

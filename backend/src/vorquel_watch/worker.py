@@ -43,19 +43,12 @@ def process_one(
             {"stage": "INDEXING", "progress_permille": 930},
         )
         persist_transcription(repo, transcript, rows)
-        repo.update_job(
-            job_id,
-            {
-                "status": "SUCCEEDED",
-                "stage": "COMPLETE",
-                "progress_permille": 1000,
-                "completed_at": _now(),
-                "error_code": None,
-                "error_message": None,
-            },
-        )
+        # Atomic: provenance revalidated, source pointers and terminal status
+        # written in one transaction. Raises if the job stopped being RUNNING,
+        # so a cancellation that landed mid-persist is never overwritten.
+        repo.complete_job(job_id, transcript["transcript_id"])
     except JobCancelled:
-        repo.update_job(
+        repo.set_terminal_status(
             job_id,
             {
                 "status": "CANCELLED",
@@ -66,7 +59,7 @@ def process_one(
         )
     except ValueError as exc:
         LOG.warning("Job rejected: %s", type(exc).__name__)
-        repo.update_job(
+        repo.set_terminal_status(
             job_id,
             {
                 "status": "FAILED",
@@ -77,7 +70,7 @@ def process_one(
         )
     except Exception as exc:
         LOG.exception("Job failed (%s)", type(exc).__name__)
-        repo.update_job(
+        repo.set_terminal_status(
             job_id,
             {
                 "status": "FAILED",

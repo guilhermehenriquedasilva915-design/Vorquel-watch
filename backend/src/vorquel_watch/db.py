@@ -277,9 +277,12 @@ class WatchRepository:
         transcript_id: str,
         segment_count: int,
         word_count: int,
-        source_id: str,
-        job_id: str,
     ) -> None:
+        """Write transcript totals only.
+
+        The source pointers and the terminal job status are set by complete_job
+        in a single transaction, never piecemeal from here.
+        """
         self.client.table("transcripts").update(
             {
                 "segment_count": segment_count,
@@ -287,12 +290,35 @@ class WatchRepository:
             }
         ).eq("transcript_id", transcript_id).execute()
 
-        self.client.table("sources").update(
-            {
-                "latest_transcript_id": transcript_id,
-                "latest_successful_job_id": job_id,
-            }
-        ).eq("source_id", source_id).execute()
+    def complete_job(self, job_id: str, transcript_id: str) -> None:
+        """Finalize a job atomically (INT-02).
+
+        The database function revalidates provenance and the segment count,
+        sets the source pointers and marks the job SUCCEEDED in one
+        transaction. It raises if the job is no longer RUNNING, which is how a
+        concurrent cancellation wins the race (INT-03).
+        """
+        self.client.rpc(
+            "complete_processing_job",
+            {"p_job_id": job_id, "p_transcript_id": transcript_id},
+        ).execute()
+
+    def set_terminal_status(self, job_id: str, values: dict[str, Any]) -> bool:
+        """Move a non-terminal job to a terminal state. Returns whether it applied.
+
+        The status predicate is what makes this safe: a job that already reached
+        CANCELLED matches no row, so this is a no-op instead of a state-machine
+        violation raised from inside an exception handler, which would otherwise
+        propagate out of the worker's error path and kill the loop.
+        """
+        result = (
+            self.client.table("processing_jobs")
+            .update(values)
+            .eq("job_id", job_id)
+            .in_("status", ["QUEUED", "RUNNING"])
+            .execute()
+        )
+        return bool(result.data)
 
     def get_transcript_meta(self, transcript_id: str) -> dict[str, Any] | None:
         result = (
