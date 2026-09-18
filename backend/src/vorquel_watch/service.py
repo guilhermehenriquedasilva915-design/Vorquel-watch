@@ -60,6 +60,7 @@ class WatchService:
                 "processing": {
                     "local": True,
                     "raw_media_cloud_upload": False,
+                    "resume_running_jobs": False,
                 },
             },
             contains_untrusted_content=False,
