@@ -104,6 +104,16 @@ class WatchService:
         language_hint: str | None = None,
     ) -> dict[str, Any]:
         normalized = mode.strip().upper()
+        clean_language = language_hint.strip().lower() if language_hint else None
+        if clean_language and (
+            len(clean_language) > 16
+            or not all(ch.isalnum() or ch == "-" for ch in clean_language)
+        ):
+            return safe_error(
+                "start_analysis",
+                "INVALID_ARGUMENT",
+                "language_hint must be a short language code.",
+            )
         if normalized != "FAST":
             return safe_error(
                 "start_analysis",
@@ -114,10 +124,10 @@ class WatchService:
             job, reused = self.repo.create_or_reuse_job(
                 source_id=source_id,
                 mode=normalized,
-                language_hint=language_hint.strip() if language_hint else None,
+                language_hint=clean_language,
                 config_hash=self._config_hash(
                     mode=normalized,
-                    language_hint=language_hint,
+                    language_hint=clean_language,
                 ),
             )
             return envelope(
