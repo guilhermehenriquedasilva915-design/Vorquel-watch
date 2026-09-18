@@ -1,0 +1,6 @@
+[project]
+name = "vorquel-watch"
+version = "0.0.1"
+description = "Local-first media analysis core for Vorquel Watch"
+requires-python = ">=3.12"
+dependencies = []

@@ -1,0 +1,26 @@
+from enum import StrEnum
+
+
+class DataTrustClass(StrEnum):
+    UNTRUSTED_MEDIA = "UNTRUSTED_MEDIA"
+    UNTRUSTED_DERIVED = "UNTRUSTED_DERIVED"
+    USER_AUTHORED_DATA = "USER_AUTHORED_DATA"
+    SERVER_CONTROL = "SERVER_CONTROL"
+
+
+class InstructionAuthority(StrEnum):
+    NONE = "NONE"
+    CONTROL_PLANE = "CONTROL_PLANE"
+
+
+class ReviewStatus(StrEnum):
+    UNREVIEWED = "UNREVIEWED"
+    HUMAN_CONFIRMED = "HUMAN_CONFIRMED"
+    HUMAN_CORRECTED = "HUMAN_CORRECTED"
+    HUMAN_REJECTED = "HUMAN_REJECTED"
+
+
+class ProcessingMode(StrEnum):
+    FAST = "FAST"
+    STANDARD = "STANDARD"
+    SPEAKERS = "SPEAKERS"
