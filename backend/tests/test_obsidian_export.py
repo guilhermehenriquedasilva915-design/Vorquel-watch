@@ -26,8 +26,8 @@ class FakeRepo:
                         "transcript_id": "trn_abc",
                         "segment_id": "seg_abc",
                         "screen_observation_id": None,
-                        "start_ms": 1000,
-                        "end_ms": 2000,
+                        "start_ms": 1_216_000,
+                        "end_ms": 1_221_000,
                     }
                 ],
             }
@@ -35,13 +35,19 @@ class FakeRepo:
 
 
 class ObsidianExportTests(unittest.TestCase):
-    def test_render_contains_frontmatter_and_provenance(self):
+    def test_render_is_human_readable_and_keeps_traceability(self):
         item = FakeRepo().export_approved_knowledge()[0]
         text = render_knowledge_markdown(item)
         self.assertIn('knowledge_id: "knw_abc"', text)
+        self.assertIn('aliases: ["Retry pattern"]', text)
         self.assertIn("# Retry pattern", text)
+        self.assertIn("## Aprendizado", text)
+        self.assertIn("## Aplicação na Vorquel", text)
+        self.assertIn("## Fonte e rastreabilidade", text)
+        self.assertIn("**20:16–20:21**", text)
         self.assertIn("segment_id=seg_abc", text)
-        self.assertIn("instruction_authority = NONE", text)
+        self.assertIn("timestamp_ms=1216000-1221000", text)
+        self.assertIn("`instruction_authority = NONE`", text)
 
     def test_export_writes_only_generated_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
