@@ -552,6 +552,67 @@ class WatchService:
                 "reject_knowledge_candidate", "INVALID_ARGUMENT", str(exc)
             )
 
+    def withdraw_knowledge(
+        self,
+        knowledge_id: str,
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        try:
+            item = KnowledgeWriter(self.repo).withdraw(
+                knowledge_id,
+                reason=reason,
+            )
+            return envelope(
+                "withdraw_knowledge",
+                {"knowledge_item": item},
+                contains_untrusted_content=True,
+            )
+        except ValueError as exc:
+            return safe_error("withdraw_knowledge", "INVALID_ARGUMENT", str(exc))
+
+    def supersede_knowledge(
+        self,
+        knowledge_id: str,
+        replacement_knowledge_id: str,
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        try:
+            item = KnowledgeWriter(self.repo).supersede(
+                knowledge_id,
+                replacement_knowledge_id,
+                reason=reason,
+            )
+            return envelope(
+                "supersede_knowledge",
+                {"knowledge_item": item},
+                contains_untrusted_content=True,
+            )
+        except ValueError as exc:
+            return safe_error("supersede_knowledge", "INVALID_ARGUMENT", str(exc))
+
+    def synthesize_knowledge(
+        self,
+        query: str,
+        *,
+        domain: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        try:
+            result = KnowledgeWriter(self.repo).synthesize(
+                query,
+                domain=domain,
+                limit=limit,
+            )
+            return envelope(
+                "synthesize_knowledge",
+                {"synthesis": result},
+                contains_untrusted_content=True,
+            )
+        except (TypeError, ValueError) as exc:
+            return safe_error("synthesize_knowledge", "INVALID_ARGUMENT", str(exc))
+
     def search_knowledge(
         self,
         query: str,
