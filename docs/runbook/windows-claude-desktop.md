@@ -18,7 +18,7 @@ Raw media is not uploaded to Supabase by this alpha.
 
 From PowerShell in the repository root:
 
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\setup.ps1 -SupabaseUrl https://xnygwzuckijaxzlszfpn.supabase.co
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\setup.ps1 -SupabaseUrl https://klirypiamkkwwdhvesar.supabase.co
 
 The script asks for the Supabase secret/service key with hidden input. The key is written only to the local Vorquel Watch data directory and is ignored by Git.
 
