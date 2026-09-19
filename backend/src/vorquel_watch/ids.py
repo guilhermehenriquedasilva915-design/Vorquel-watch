@@ -22,6 +22,11 @@ _ALLOWED_PREFIXES = {
     # Screen pipeline (ADR 0002).
     "obs_",
     "ocr_",
+    # Vorquel Knowledge Store V0.1.
+    "knd_",
+    "knw_",
+    "krv_",
+    "ksr_",
 }
 
 # Identifiers are opaque handles. Anything outside this alphabet - whitespace,
