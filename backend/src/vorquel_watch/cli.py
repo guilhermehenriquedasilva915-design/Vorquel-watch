@@ -14,6 +14,7 @@ from vorquel_watch.db import WatchRepository
 from vorquel_watch.ingest import ingest_local_file
 from vorquel_watch.local_storage import LocalStorage
 from vorquel_watch.logging_utils import configure_logging
+from vorquel_watch.service import WatchService
 from vorquel_watch.worker import run_worker
 
 
@@ -175,6 +176,46 @@ def cmd_worker(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_analyze(args: argparse.Namespace) -> int:
+    """Ingest a local file, create/reuse FAST analysis, and process it locally."""
+    settings = Settings.from_env()
+    source = ingest_local_file(args.path, settings)
+
+    service = WatchService(settings=settings)
+    started = service.start_analysis(
+        source_id=source["source_id"],
+        mode="FAST",
+        language_hint=args.language,
+    )
+    data = started.get("data") or {}
+    if "error" in data:
+        print(json.dumps(started, ensure_ascii=False, indent=2))
+        return 1
+
+    job = data["job"]
+    reused = bool(data.get("reused"))
+
+    # A completed compatible result needs no worker. For a newly queued job,
+    # process one local job synchronously, then refresh this target job.
+    if job.get("status") == "QUEUED":
+        configure_logging()
+        run_worker(once=True)
+        refreshed = service.get_job(job["job_id"])
+        refreshed_data = refreshed.get("data") or {}
+        if "error" not in refreshed_data:
+            job = refreshed_data
+
+    result = {
+        "source": source,
+        "analysis": {
+            "job": job,
+            "reused": reused,
+        },
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if job.get("status") == "SUCCEEDED" else 1
+
+
 def cmd_doctor(_: argparse.Namespace) -> int:
     data_dir = default_data_dir()
     checks: dict[str, object] = {
@@ -293,6 +334,14 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = sub.add_parser("ingest")
     ingest.add_argument("path")
     ingest.set_defaults(func=cmd_ingest)
+
+    analyze = sub.add_parser(
+        "analyze",
+        help="Ingest and process a local video/audio file in one command.",
+    )
+    analyze.add_argument("path")
+    analyze.add_argument("--language", default="pt")
+    analyze.set_defaults(func=cmd_analyze)
 
     worker = sub.add_parser("worker")
     worker.add_argument("--once", action="store_true")
