@@ -20,12 +20,15 @@ EXPECTED_TOOLS = {
     "create_export",
     "list_artifacts",
     "get_artifact",
-    # V1.1 reviewed-knowledge extension (ADR 0004).
+    # V1.2 reviewed-knowledge + lifecycle/synthesis extension.
     "propose_knowledge_candidate",
     "list_knowledge_candidates",
     "approve_knowledge_candidate",
     "reject_knowledge_candidate",
     "search_knowledge",
+    "withdraw_knowledge",
+    "supersede_knowledge",
+    "synthesize_knowledge",
 }
 
 # Arguments no tool may ever take. The surface is bounded by what does not
