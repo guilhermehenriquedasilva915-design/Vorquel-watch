@@ -144,6 +144,25 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ingest_url(args: argparse.Namespace) -> int:
+    """Fetch a YouTube video into the local workspace and register it.
+
+    A URL is accepted here, in the local control plane, and nowhere else. No
+    MCP tool takes one.
+    """
+    from vorquel_watch.ingest import ingest_youtube_url
+    from vorquel_watch.youtube import YouTubeError
+
+    settings = Settings.from_env()
+    try:
+        result = ingest_youtube_url(args.url, settings)
+    except YouTubeError as exc:
+        print(f"Ingest refused: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_worker(args: argparse.Namespace) -> int:
     run_worker(once=args.once, poll_seconds=args.poll_seconds)
     return 0
@@ -221,6 +240,13 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = sub.add_parser("ingest")
     ingest.add_argument("path")
     ingest.set_defaults(func=cmd_ingest)
+
+    ingest_url = sub.add_parser(
+        "ingest-url",
+        help="Fetch a single YouTube video and register it locally.",
+    )
+    ingest_url.add_argument("url")
+    ingest_url.set_defaults(func=cmd_ingest_url)
 
     worker = sub.add_parser("worker")
     worker.add_argument("--once", action="store_true")
