@@ -663,12 +663,20 @@ class WatchRepository:
     def insert_screen_observations(self, rows: Iterable[dict[str, Any]]) -> None:
         payload = list(rows)
         if payload:
-            self.client.table("screen_observations").insert(payload).execute()
+            self.client.table("screen_observations").upsert(
+                payload,
+                on_conflict="observation_id",
+                ignore_duplicates=True,
+            ).execute()
 
     def insert_screen_text_blocks(self, rows: Iterable[dict[str, Any]]) -> None:
         payload = list(rows)
         if payload:
-            self.client.table("screen_text_blocks").insert(payload).execute()
+            self.client.table("screen_text_blocks").upsert(
+                payload,
+                on_conflict="ocr_id",
+                ignore_duplicates=True,
+            ).execute()
 
     def observation_at(
         self,
