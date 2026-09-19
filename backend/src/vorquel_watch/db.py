@@ -958,6 +958,22 @@ class WatchRepository:
         ).execute()
         return result.data or []
 
+
+    def export_approved_knowledge(
+        self,
+        *,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        result = self.client.rpc(
+            "export_approved_knowledge",
+            {
+                "p_limit": max(1, min(int(limit), 1000)),
+                "p_offset": max(0, int(offset)),
+            },
+        ).execute()
+        return result.data or []
+
     def create_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = self.client.table("artifacts").insert(payload).execute()
         return result.data[0]
