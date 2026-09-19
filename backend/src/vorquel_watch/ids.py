@@ -27,6 +27,8 @@ _ALLOWED_PREFIXES = {
     "knw_",
     "krv_",
     "ksr_",
+    # Knowledge lifecycle events (Brain V1.2).
+    "kev_",
 }
 
 # Identifiers are opaque handles. Anything outside this alphabet - whitespace,
