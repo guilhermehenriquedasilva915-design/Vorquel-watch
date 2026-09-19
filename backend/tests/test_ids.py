@@ -21,6 +21,10 @@ SCHEMA_REQUIRED_PREFIXES = (
     "rev_",
     "obs_",
     "ocr_",
+    "knd_",
+    "knw_",
+    "krv_",
+    "ksr_",
 )
 
 
