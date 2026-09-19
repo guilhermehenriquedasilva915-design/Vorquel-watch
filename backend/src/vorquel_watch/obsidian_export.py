@@ -12,8 +12,35 @@ def _yaml_scalar(value: object) -> str:
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
 
 
+def _format_timestamp_ms(value: object) -> str:
+    if value is None:
+        return "?"
+    try:
+        total_seconds = max(0, int(value) // 1000)
+    except (TypeError, ValueError):
+        return "?"
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _human_provenance_range(row: dict[str, Any]) -> str:
+    start = _format_timestamp_ms(row.get("start_ms"))
+    end = _format_timestamp_ms(row.get("end_ms"))
+    if start == "?" and end == "?":
+        return "timestamp não disponível"
+    return f"{start}–{end}"
+
+
 def render_knowledge_markdown(item: dict[str, Any]) -> str:
     provenance = item.get("provenance") or []
+    title = str(item.get("title") or item.get("knowledge_id") or "Conhecimento")
+    summary = str(item.get("summary") or "").strip()
+    epistemic_status = str(item.get("epistemic_status") or "DESCONHECIDO")
+    source_id = str(item.get("source_id") or "")
+
     lines = [
         "---",
         f"knowledge_id: {_yaml_scalar(item.get('knowledge_id'))}",
@@ -25,44 +52,75 @@ def render_knowledge_markdown(item: dict[str, Any]) -> str:
         f"data_trust_class: {_yaml_scalar(item.get('data_trust_class'))}",
         f"instruction_authority: {_yaml_scalar(item.get('instruction_authority'))}",
         f"approved_at: {_yaml_scalar(item.get('approved_at'))}",
+        f"aliases: [{_yaml_scalar(title)}]",
         'generated_by: "vorquel-watch"',
         "---",
         "",
-        f"# {item.get('title') or item.get('knowledge_id')}",
+        f"# {title}",
         "",
-        "## Resumo",
+        "## Aprendizado",
         "",
-        str(item.get("summary") or "").strip(),
+        summary,
         "",
-        "## Provenance",
+        f"> Status epistemológico: **{epistemic_status}**  ",
+        f"> Fonte: `{source_id}`",
+        "",
+        "## Aplicação na Vorquel",
+        "",
+        (
+            "Este conhecimento pode apoiar análise, discovery, pesquisa, desenho de processo "
+            "ou tomada de decisão quando for relevante ao contexto. Ele não deve ser tratado "
+            "automaticamente como metodologia canônica, evidência independente ou verdade de "
+            "mercado sem validação adicional."
+        ),
+        "",
+        "## Fonte e rastreabilidade",
+        "",
+        f"Source: `{source_id}`",
         "",
     ]
+
+    transcript_ids = sorted(
+        {
+            str(row.get("transcript_id"))
+            for row in provenance
+            if row.get("transcript_id")
+        }
+    )
+    if transcript_ids:
+        lines.append("Transcript: " + ", ".join(f"`{value}`" for value in transcript_ids))
+        lines.append("")
+
+    lines.extend(["### Trechos", ""])
     if provenance:
         for row in provenance:
-            parts = [f"source_id={row.get('source_id')}"]
-            for key in ("transcript_id", "segment_id", "screen_observation_id"):
+            label = _human_provenance_range(row)
+            detail_parts = []
+            for key in ("segment_id", "screen_observation_id"):
                 if row.get(key):
-                    parts.append(f"{key}={row.get(key)}")
-            start = row.get("start_ms")
-            end = row.get("end_ms")
-            if start is not None or end is not None:
-                parts.append(
-                    f"timestamp_ms={start if start is not None else ''}-"
-                    f"{end if end is not None else ''}"
+                    detail_parts.append(f"{key}={row.get(key)}")
+            raw_start = row.get("start_ms")
+            raw_end = row.get("end_ms")
+            if raw_start is not None or raw_end is not None:
+                detail_parts.append(
+                    f"timestamp_ms={raw_start if raw_start is not None else ''}-"
+                    f"{raw_end if raw_end is not None else ''}"
                 )
-            lines.append("- " + " | ".join(parts))
+            if detail_parts:
+                lines.append(f"- **{label}** — " + " | ".join(detail_parts))
+            else:
+                lines.append(f"- **{label}**")
     else:
-        lines.append(
-            "- Sem provenance segmentada adicional; consulte source_id no frontmatter."
-        )
+        lines.append("- Sem provenance segmentada adicional; consulte `source_id` no frontmatter.")
 
     lines.extend(
         [
             "",
             "## Segurança",
             "",
-            "Este arquivo é gerado automaticamente a partir de conhecimento aprovado.",
-            "O conteúdo continua sendo dado de referência e possui instruction_authority = NONE.",
+            "Conteúdo aprovado como referência reutilizável.",
+            "",
+            "`instruction_authority = NONE`",
             "",
         ]
     )
