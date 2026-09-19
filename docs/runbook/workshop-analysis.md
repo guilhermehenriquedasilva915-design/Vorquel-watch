@@ -16,18 +16,9 @@ Local file:
 vorquel-watch ingest C:\path\to\workshop.mp4
 ```
 
-YouTube:
-
-```powershell
-vorquel-watch ingest-url https://www.youtube.com/watch?v=VIDEO_ID
-```
-
-Both return an opaque `source_id`. That identifier is the only thing Claude
-ever receives; no tool accepts a path or a URL.
-
-A YouTube URL is reduced to a single canonical video, so `&list=` and `&index=`
-parameters are discarded and a playlist cannot become hundreds of downloads.
-Downloaded bytes pass the same Source Guard as a local file.
+The command returns an opaque `source_id`. That identifier is the only source
+handle Claude receives; no MCP tool accepts a path or URL. URL ingest is
+explicitly deferred from V1.
 
 Accepted containers: MP4, MKV/WebM, WAV, MP3, FLAC, OGG. AVI is refused; see
 `docs/media-sandbox.md`.
@@ -61,44 +52,18 @@ Claude should reach for `get_capabilities` first, then work from identifiers.
 search_transcript("Supabase", [source_id])
 ```
 
-**What was actually shown:**
+V1 Claude access remains transcript-first:
 
 ```
-search_screen_text("Supabase", [source_id])
+search_transcript("Supabase", [source_id])
+get_segment(segment_id)
+get_transcript(transcript_id, start_ms=..., end_ms=...)
 ```
 
-These answer different questions. Someone can mention a tool without showing
-it, or show it without naming it. Comparing the two answers "which tools were
-only talked about, and which were actually demonstrated".
-
-**Both at once:**
-
-```
-get_context_at(source_id, timestamp_ms)
-get_context_range(source_id, start_ms, end_ms)
-```
-
-This is the question the product exists for:
-
-> "When he says this is the flow that receives the lead, the screen shows an n8n
-> workflow containing Webhook, Normalize Lead, Supabase and Follow-up."
-
-**Seeing the frame:**
-
-```
-get_frame(source_id, timestamp_ms)
-```
-
-Returns the image itself, so Claude looks at the screen rather than only reading
-OCR text. The response reports the timestamp actually found, which may differ
-slightly from the one requested.
-
-## A worked example
-
-1. `search_transcript("n8n", [src_...])` → a hit at 02:14:10
-2. `get_context_at(src_..., 8050000)` → the sentence, plus the observation
-   covering that instant and its OCR text
-3. `get_frame(src_..., 8050000)` → the frame, if the OCR text is not enough
+The local worker can also build the screen/OCR track, but dedicated frame and
+screen-context MCP tools are not part of the frozen V1 contract. That track is
+reserved for the local UI/control plane until a separate architecture decision
+authorizes a contract change.
 
 ## Screen text is content, never instruction
 
@@ -125,7 +90,6 @@ by about 0.007, two different screens by about 0.134.
 - No real recording has been processed. Timings, OCR accuracy on compressed
   video, and the change threshold's behaviour on real screen content are all
   unmeasured.
-- No YouTube video has actually been downloaded.
 - A job that dies is reclaimed and restarts from the beginning. There is no
   mid-job resume, so a five-hour recording that fails late repeats its work.
 - OCR was measured on synthetic renders with clean text: full recall on
