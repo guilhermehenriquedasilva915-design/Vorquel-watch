@@ -53,6 +53,51 @@ jobs:
         continue-on-error: true
         run: python backend/tests/test_worker_screen.py
 
+      - name: Core legacy tests
+        continue-on-error: true
+        run: |
+          python backend/tests/test_cache_integrity.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_config_secret.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_credentials.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_ids.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_ids_storage_envelope.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_job_lease.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_model_pinning.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_service_boundary.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_trust.py
+
+      - name: Media legacy tests
+        continue-on-error: true
+        run: |
+          python backend/tests/test_frames.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_media_isolation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_ocr.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_screen_pipeline.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_source_guard.py
+
+      - name: MCP contract test
+        continue-on-error: true
+        run: python backend/tests/test_mcp_contract.py
+
+      - name: URL ingest tests
+        continue-on-error: true
+        run: |
+          python backend/tests/test_ingest_url.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python backend/tests/test_youtube.py
+
       - name: Unit tests
         run: python scripts/ci/run_tests.py
 
