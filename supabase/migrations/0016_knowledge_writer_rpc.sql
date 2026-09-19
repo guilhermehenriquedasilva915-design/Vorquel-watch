@@ -86,7 +86,7 @@ begin
     p_epistemic_status, 'PENDING', p_content_hash,
     'UNTRUSTED_DERIVED', 'NONE'
   )
-  on conflict (source_id, content_hash) do nothing;
+  on conflict on constraint knowledge_candidates_source_id_content_hash_key do nothing;
 
   -- If this exact content already exists for the source, return the existing
   -- candidate rather than duplicating it. Provenance for an existing candidate
