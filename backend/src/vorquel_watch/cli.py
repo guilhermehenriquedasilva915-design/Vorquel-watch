@@ -302,6 +302,47 @@ def cmd_brain_reject(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_brain_withdraw(args: argparse.Namespace) -> int:
+    try:
+        item = _brain_writer().withdraw(
+            args.knowledge_id,
+            reason=args.reason,
+        )
+    except (TypeError, ValueError) as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps({"knowledge_item": item}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_brain_supersede(args: argparse.Namespace) -> int:
+    try:
+        item = _brain_writer().supersede(
+            args.knowledge_id,
+            args.replacement_knowledge_id,
+            reason=args.reason,
+        )
+    except (TypeError, ValueError) as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps({"knowledge_item": item}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_brain_synthesize(args: argparse.Namespace) -> int:
+    try:
+        result = _brain_writer().synthesize(
+            args.query,
+            domain=args.domain,
+            limit=args.limit,
+        )
+    except (TypeError, ValueError) as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps({"synthesis": result}, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_brain_search(args: argparse.Namespace) -> int:
     try:
         items = _brain_writer().search(
@@ -537,9 +578,35 @@ def build_parser() -> argparse.ArgumentParser:
     reject.add_argument("--note")
     reject.set_defaults(func=cmd_brain_reject)
 
+    withdraw = brain_sub.add_parser(
+        "withdraw",
+        help="Withdraw one active knowledge item after explicit human intent.",
+    )
+    withdraw.add_argument("knowledge_id")
+    withdraw.add_argument("--reason", required=True)
+    withdraw.set_defaults(func=cmd_brain_withdraw)
+
+    supersede = brain_sub.add_parser(
+        "supersede",
+        help="Mark one active knowledge item as superseded by another approved item.",
+    )
+    supersede.add_argument("knowledge_id")
+    supersede.add_argument("replacement_knowledge_id")
+    supersede.add_argument("--reason", required=True)
+    supersede.set_defaults(func=cmd_brain_supersede)
+
+    synthesize = brain_sub.add_parser(
+        "synthesize",
+        help="Build a cited extractive synthesis with explicit gap analysis.",
+    )
+    synthesize.add_argument("query")
+    synthesize.add_argument("--domain")
+    synthesize.add_argument("--limit", type=int, default=8)
+    synthesize.set_defaults(func=cmd_brain_synthesize)
+
     search = brain_sub.add_parser(
         "search",
-        help="Search approved Vorquel Brain knowledge.",
+        help="Search active approved Vorquel Brain knowledge.",
     )
     search.add_argument("query")
     search.add_argument("--domain")
