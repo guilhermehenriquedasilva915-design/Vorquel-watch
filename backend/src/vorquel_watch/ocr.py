@@ -122,9 +122,13 @@ class ScreenOcr:
         raw = engine(image)
 
         blocks: list[OcrBlock] = []
-        texts = list(getattr(raw, "txts", None) or [])
-        scores = list(getattr(raw, "scores", None) or [])
-        boxes = list(getattr(raw, "boxes", None) or [])
+        raw_texts = getattr(raw, "txts", None)
+        raw_scores = getattr(raw, "scores", None)
+        raw_boxes = getattr(raw, "boxes", None)
+
+        texts = list(raw_texts) if raw_texts is not None else []
+        scores = list(raw_scores) if raw_scores is not None else []
+        boxes = list(raw_boxes) if raw_boxes is not None else []
 
         for index, text in enumerate(texts):
             cleaned = (text or "").strip()
