@@ -5,6 +5,7 @@ import getpass
 from importlib.metadata import version as package_version
 import json
 from pathlib import Path
+import shutil
 import sys
 
 from vorquel_watch import credentials
@@ -153,6 +154,7 @@ def cmd_doctor(_: argparse.Namespace) -> int:
     data_dir = default_data_dir()
     checks: dict[str, object] = {
         "python": sys.version.split()[0],
+        "python_supported": sys.version_info[:2] == (3, 12),
         "data_dir": str(data_dir),
         "credential_backend": "dpapi" if credentials.is_supported() else "unavailable",
         "credential_present": credentials.has_secret(
@@ -160,20 +162,51 @@ def cmd_doctor(_: argparse.Namespace) -> int:
         ),
     }
 
+    storage = LocalStorage(data_dir)
+    try:
+        storage.ensure()
+        disk = shutil.disk_usage(storage.root)
+        checks["storage"] = "ok"
+        checks["disk_free_bytes"] = disk.free
+        checks["disk_free_gib"] = round(disk.free / (1024 ** 3), 2)
+    except Exception as exc:
+        checks["storage"] = f"failed:{type(exc).__name__}"
+
+    repo = None
     try:
         settings = Settings.from_env()
-        LocalStorage(settings.data_dir).ensure()
         repo = WatchRepository(settings)
         repo.healthcheck()
         checks["supabase"] = "ok"
+        checks["database_schema"] = repo.schema_healthcheck()
+        checks["worker"] = repo.worker_status()
+
+        model_repo, model_revision = settings.whisper_model, None
+        try:
+            from vorquel_watch.config import resolve_model_pin
+            model_repo, model_revision = resolve_model_pin(
+                settings.whisper_model, settings.whisper_model_revision
+            )
+        except Exception as exc:
+            checks["model_pin"] = f"failed:{type(exc).__name__}"
+        else:
+            checks["model_pin"] = {
+                "repository": model_repo,
+                "revision": model_revision,
+                "cache_present": storage.models.exists()
+                and any(storage.models.iterdir()),
+            }
     except Exception as exc:
         checks["supabase"] = f"failed:{type(exc).__name__}"
+        checks["database_schema"] = "not_checked"
+        checks["worker"] = "not_checked"
 
     for label, package in (
         ("mcp", "mcp"),
         ("supabase_python", "supabase"),
         ("faster_whisper", "faster-whisper"),
         ("av", "av"),
+        ("rapidocr", "rapidocr"),
     ):
         try:
             checks[label] = package_version(package)
@@ -189,8 +222,21 @@ def cmd_doctor(_: argparse.Namespace) -> int:
         )
     )
 
+    required_ok = (
+        checks.get("python_supported") is True
+        and checks.get("credential_present") is True
+        and checks.get("storage") == "ok"
+        and checks.get("supabase") == "ok"
+        and checks.get("mcp") != "missing"
+        and checks.get("faster_whisper") != "missing"
+        and checks.get("av") != "missing"
+        and checks.get("rapidocr") != "missing"
+        and checks.get("legacy_plaintext_secret") is False
+    )
+    checks["ready_for_local_fast"] = required_ok
+
     print(json.dumps(checks, ensure_ascii=False, indent=2))
-    return 0 if checks.get("supabase") == "ok" else 1
+    return 0 if required_ok else 1
 
 
 def cmd_print_claude_config(_: argparse.Namespace) -> int:
