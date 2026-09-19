@@ -115,7 +115,7 @@ class TranscriptLimitTests(TestCase):
         )
 
         with (
-            mock.patch.object(engine, "_load_model", return_value=fake_model),
+            mock.patch("vorquel_watch.transcription.FasterWhisperEngine._load_model", return_value=fake_model),
             mock.patch(
                 "vorquel_watch.transcription.LocalStorage.verify_object",
                 return_value=Path("media.mp4"),
@@ -147,7 +147,7 @@ class TranscriptLimitTests(TestCase):
             SimpleNamespace(language="en"),
         )
         with (
-            mock.patch.object(engine, "_load_model", return_value=fake_model),
+            mock.patch("vorquel_watch.transcription.FasterWhisperEngine._load_model", return_value=fake_model),
             mock.patch(
                 "vorquel_watch.transcription.LocalStorage.verify_object",
                 return_value=Path("media.mp4"),
