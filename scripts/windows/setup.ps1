@@ -1,5 +1,5 @@
 param(
-    [string]$SupabaseUrl = "https://xnygwzuckijaxzlszfpn.supabase.co"
+    [string]$SupabaseUrl = "https://klirypiamkkwwdhvesar.supabase.co"
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,7 +18,8 @@ if (-not (Test-Path $Python)) {
     & py -3.12 -m venv $Venv
 }
 
-& $Python -m pip install -e "$RepoRoot\backend[transcribe]"
+& $Python -m pip install --require-hashes -r "$RepoRoot\backend\requirements.lock"
+& $Python -m pip install -e "$RepoRoot\backend" --no-deps
 
 if (-not $SupabaseUrl) {
     $SupabaseUrl = Read-Host "Supabase project URL"
