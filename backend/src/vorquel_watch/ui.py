@@ -35,6 +35,7 @@ class VorquelWatchUI:
 
         self.selected_file: Path | None = None
         self.pending_by_id: dict[str, dict[str, Any]] = {}
+        self.checked_candidate_ids: set[str] = set()
 
         self.file_var = tk.StringVar(value="Nenhum arquivo selecionado")
         self.status_var = tk.StringVar(value="Pronto")
@@ -96,30 +97,33 @@ class VorquelWatchUI:
         ttk.Button(actions, text="Atualizar", command=self.refresh_candidates).pack(
             side="left"
         )
-        ttk.Button(actions, text="Aprovar selecionados", command=self.approve_selected).pack(
+        ttk.Button(actions, text="Aprovar marcados", command=self.approve_selected).pack(
             side="left", padx=(8, 0)
         )
-        ttk.Button(actions, text="Rejeitar selecionados", command=self.reject_selected).pack(
+        ttk.Button(actions, text="Rejeitar marcados", command=self.reject_selected).pack(
             side="left", padx=(8, 0)
         )
 
-        columns = ("type", "domain", "title", "source")
+        columns = ("check", "type", "domain", "title", "source")
         self.candidates = ttk.Treeview(
             brain,
             columns=columns,
             show="headings",
             height=9,
-            selectmode="extended",
+            selectmode="browse",
         )
+        self.candidates.heading("check", text="✓")
         self.candidates.heading("type", text="Tipo")
         self.candidates.heading("domain", text="Domínio")
         self.candidates.heading("title", text="Título")
         self.candidates.heading("source", text="Source")
+        self.candidates.column("check", width=46, stretch=False, anchor="center")
         self.candidates.column("type", width=110, stretch=False)
         self.candidates.column("domain", width=130, stretch=False)
         self.candidates.column("title", width=420)
         self.candidates.column("source", width=280)
         self.candidates.pack(fill="both", expand=True)
+        self.candidates.bind("<Button-1>", self.toggle_candidate_check)
         self.candidates.bind("<Double-1>", self.show_candidate_details)
 
         search = ttk.Frame(brain)
@@ -199,8 +203,37 @@ class VorquelWatchUI:
             quiet=True,
         )
 
+    def toggle_candidate_check(self, event) -> None:
+        row_id = self.candidates.identify_row(event.y)
+        column = self.candidates.identify_column(event.x)
+        if not row_id or column != "#1":
+            return
+        if row_id in self.checked_candidate_ids:
+            self.checked_candidate_ids.remove(row_id)
+            mark = "☐"
+        else:
+            self.checked_candidate_ids.add(row_id)
+            mark = "☑"
+        values = list(self.candidates.item(row_id, "values"))
+        if values:
+            values[0] = mark
+            self.candidates.item(row_id, values=values)
+
+    def _checked_candidate_ids(self) -> list[str]:
+        items = [
+            candidate_id
+            for candidate_id in self.candidates.get_children()
+            if candidate_id in self.checked_candidate_ids
+        ]
+        if not items:
+            messagebox.showwarning(
+                "Vorquel Watch",
+                "Marque um ou mais candidates na coluna ✓.",
+            )
+        return items
+
     def approve_selected(self) -> None:
-        candidate_ids = self._selected_candidate_ids()
+        candidate_ids = self._checked_candidate_ids()
         if not candidate_ids:
             return
         if not messagebox.askyesno(
@@ -306,10 +339,10 @@ class VorquelWatchUI:
         self.refresh_candidates()
 
     def show_candidate_details(self, _event=None) -> None:
-        candidate_ids = self._selected_candidate_ids(show_warning=False)
-        if not candidate_ids:
+        selection = self.candidates.selection()
+        if not selection:
             return
-        candidate = self.pending_by_id.get(candidate_ids[0])
+        candidate = self.pending_by_id.get(selection[0])
         if not candidate:
             return
         self._show_json({"candidate": candidate}, "Candidate selecionado.")
@@ -352,19 +385,6 @@ class VorquelWatchUI:
             return
         os.startfile(str(vault))  # type: ignore[attr-defined]
 
-    def _selected_candidate_ids(
-        self,
-        *,
-        show_warning: bool = True,
-    ) -> list[str]:
-        selection = list(self.candidates.selection())
-        if not selection and show_warning:
-            messagebox.showwarning(
-                "Vorquel Watch",
-                "Selecione um ou mais candidates primeiro.",
-            )
-        return selection
-
     def _after_analysis(self, data: dict[str, Any]) -> None:
         self._show_json(data, "Análise concluída.")
         self.refresh_candidates()
@@ -378,6 +398,13 @@ class VorquelWatchUI:
             self.candidates.delete(item)
         self.pending_by_id.clear()
 
+        current_ids = {
+            str(candidate.get("candidate_id") or "")
+            for candidate in (data.get("items") or [])
+            if candidate.get("candidate_id")
+        }
+        self.checked_candidate_ids.intersection_update(current_ids)
+
         for candidate in data.get("items") or []:
             candidate_id = str(candidate.get("candidate_id") or "")
             if not candidate_id:
@@ -388,6 +415,7 @@ class VorquelWatchUI:
                 "end",
                 iid=candidate_id,
                 values=(
+                    "☑" if candidate_id in self.checked_candidate_ids else "☐",
                     candidate.get("knowledge_type") or "",
                     candidate.get("domain") or "",
                     candidate.get("title") or "",
