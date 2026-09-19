@@ -40,6 +40,31 @@ class RecordingRepo:
         self.calls.append(("search", kwargs))
         return []
 
+    def withdraw_knowledge_item(self, **kwargs):
+        self.calls.append(("withdraw", kwargs))
+        return {
+            "knowledge_id": kwargs["knowledge_id"],
+            "lifecycle_state": "WITHDRAWN",
+        }
+
+    def supersede_knowledge_item(self, **kwargs):
+        self.calls.append(("supersede", kwargs))
+        return {
+            "knowledge_id": kwargs["knowledge_id"],
+            "lifecycle_state": "SUPERSEDED",
+            "superseded_by": kwargs["replacement_knowledge_id"],
+        }
+
+    def synthesize_knowledge_context(self, **kwargs):
+        self.calls.append(("synthesize", kwargs))
+        return {
+            "mode": "EXTRACTIVE_V1",
+            "answer": "- example",
+            "items": [],
+            "gaps": [],
+            "instruction_authority": "NONE",
+        }
+
 
 class KnowledgeWriterTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -133,6 +158,38 @@ class KnowledgeWriterTests(unittest.TestCase):
         name, payload = self.repo.calls[-1]
         self.assertEqual(name, "search")
         self.assertEqual(payload["limit"], 50)
+
+    def test_withdraw_requires_reason_and_creates_event(self) -> None:
+        result = self.writer.withdraw("knw_abc", reason="outdated")
+        self.assertEqual(result["lifecycle_state"], "WITHDRAWN")
+        name, payload = self.repo.calls[-1]
+        self.assertEqual(name, "withdraw")
+        self.assertTrue(payload["event_id"].startswith("kev_"))
+        self.assertEqual(payload["reason"], "outdated")
+
+    def test_supersede_links_active_replacement(self) -> None:
+        result = self.writer.supersede(
+            "knw_old",
+            "knw_new",
+            reason="corrected",
+        )
+        self.assertEqual(result["lifecycle_state"], "SUPERSEDED")
+        self.assertEqual(result["superseded_by"], "knw_new")
+        name, payload = self.repo.calls[-1]
+        self.assertEqual(name, "supersede")
+        self.assertTrue(payload["event_id"].startswith("kev_"))
+
+    def test_supersede_rejects_self_reference(self) -> None:
+        with self.assertRaises(ValueError):
+            self.writer.supersede("knw_same", "knw_same", reason="invalid")
+        self.assertEqual(self.repo.calls, [])
+
+    def test_synthesis_is_bounded_and_keyless(self) -> None:
+        result = self.writer.synthesize("discovery", limit=999)
+        self.assertEqual(result["mode"], "EXTRACTIVE_V1")
+        name, payload = self.repo.calls[-1]
+        self.assertEqual(name, "synthesize")
+        self.assertEqual(payload["limit"], 12)
 
     def test_hostile_identifier_never_reaches_repository(self) -> None:
         with self.assertRaises(ValueError):
