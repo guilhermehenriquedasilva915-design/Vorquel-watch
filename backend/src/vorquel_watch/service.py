@@ -8,6 +8,19 @@ from vorquel_watch.config import Settings
 from vorquel_watch.db import WatchRepository
 from vorquel_watch.envelope import envelope, safe_error
 from vorquel_watch.exports import create_export
+from vorquel_watch.ids import validate_id
+
+
+MAX_SEARCH_SOURCE_IDS = 25
+
+
+def _invalid(tool: str, exc: ValueError) -> dict[str, Any]:
+    """Uniform rejection for a malformed argument.
+
+    validate_id never puts the supplied value in its message, so this is safe
+    to reflect back to the caller.
+    """
+    return safe_error(tool, "INVALID_ARGUMENT", str(exc))
 
 
 class WatchService:
@@ -39,6 +52,18 @@ class WatchService:
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()
+
+    def _succeeded_job_for(self, transcript_id: str) -> tuple[dict[str, Any] | None, bool]:
+        """Return (transcript_meta, job_succeeded).
+
+        INT-04. A transcript produced by a job that failed, was cancelled or is
+        still running is not a final result and must not be served as one.
+        """
+        meta = self.repo.get_transcript_meta(transcript_id)
+        if not meta:
+            return None, False
+        job = self.repo.get_job(meta.get("job_id"))
+        return meta, bool(job and job.get("status") == "SUCCEEDED")
 
     def get_capabilities(self) -> dict[str, Any]:
         return envelope(
@@ -89,6 +114,11 @@ class WatchService:
             return safe_error("list_sources", "INVALID_ARGUMENT", str(exc))
 
     def get_source(self, source_id: str) -> dict[str, Any]:
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("get_source", exc)
+
         row = self.repo.get_source(source_id)
         if not row:
             return safe_error("get_source", "NOT_FOUND", "Source not found.")
@@ -104,7 +134,12 @@ class WatchService:
         mode: str = "FAST",
         language_hint: str | None = None,
     ) -> dict[str, Any]:
-        normalized = mode.strip().upper()
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("start_analysis", exc)
+
+        normalized = mode.strip().upper() if isinstance(mode, str) else ""
         clean_language = language_hint.strip().lower() if language_hint else None
         if clean_language and (
             len(clean_language) > 16
@@ -143,12 +178,22 @@ class WatchService:
             return safe_error("start_analysis", "INVALID_SOURCE", str(exc))
 
     def get_job(self, job_id: str) -> dict[str, Any]:
+        try:
+            job_id = validate_id(job_id, "job_")
+        except ValueError as exc:
+            return _invalid("get_job", exc)
+
         row = self.repo.get_job(job_id)
         if not row:
             return safe_error("get_job", "NOT_FOUND", "Job not found.")
         return envelope("get_job", row, contains_untrusted_content=False)
 
     def cancel_job(self, job_id: str) -> dict[str, Any]:
+        try:
+            job_id = validate_id(job_id, "job_")
+        except ValueError as exc:
+            return _invalid("cancel_job", exc)
+
         row = self.repo.cancel_job(job_id)
         if not row:
             return safe_error("cancel_job", "NOT_FOUND", "Job not found.")
@@ -163,12 +208,23 @@ class WatchService:
         limit_segments: int = 100,
         include_words: bool = False,
     ) -> dict[str, Any]:
-        meta = self.repo.get_transcript_meta(transcript_id)
+        try:
+            transcript_id = validate_id(transcript_id, "trn_")
+        except ValueError as exc:
+            return _invalid("get_transcript", exc)
+
+        meta, succeeded = self._succeeded_job_for(transcript_id)
         if not meta:
             return safe_error(
                 "get_transcript",
                 "NOT_FOUND",
                 "Transcript not found.",
+            )
+        if not succeeded:
+            return safe_error(
+                "get_transcript",
+                "TRANSCRIPT_NOT_FINAL",
+                "This transcript belongs to a job that has not succeeded.",
             )
         try:
             segments = self.repo.get_transcript_segments(
@@ -196,6 +252,17 @@ class WatchService:
         limit: int = 20,
     ) -> dict[str, Any]:
         try:
+            if not isinstance(source_ids, list) or not source_ids:
+                raise ValueError("source_ids must be a non-empty list")
+            if len(source_ids) > MAX_SEARCH_SOURCE_IDS:
+                raise ValueError(
+                    f"source_ids must contain at most {MAX_SEARCH_SOURCE_IDS} ids"
+                )
+            source_ids = [validate_id(value, "src_") for value in source_ids]
+        except ValueError as exc:
+            return _invalid("search_transcript", exc)
+
+        try:
             rows = self.repo.search_segments(
                 query=query,
                 source_ids=source_ids,
@@ -222,6 +289,11 @@ class WatchService:
         context_after: int = 2,
         include_words: bool = False,
     ) -> dict[str, Any]:
+        try:
+            segment_id = validate_id(segment_id, "seg_")
+        except ValueError as exc:
+            return _invalid("get_segment", exc)
+
         data = self.repo.get_segment(
             segment_id,
             context_before=context_before,
@@ -230,6 +302,17 @@ class WatchService:
         )
         if not data:
             return safe_error("get_segment", "NOT_FOUND", "Segment not found.")
+
+        # INT-04: a segment is only servable if its transcript is final.
+        segments = data.get("segments") or []
+        if segments:
+            _, succeeded = self._succeeded_job_for(segments[0]["transcript_id"])
+            if not succeeded:
+                return safe_error(
+                    "get_segment",
+                    "TRANSCRIPT_NOT_FINAL",
+                    "This segment belongs to a job that has not succeeded.",
+                )
         return envelope(
             "get_segment",
             data,
@@ -237,6 +320,11 @@ class WatchService:
         )
 
     def list_speakers(self, source_id: str) -> dict[str, Any]:
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("list_speakers", exc)
+
         return envelope(
             "list_speakers",
             {"items": self.repo.list_speakers(source_id)},
@@ -251,6 +339,11 @@ class WatchService:
         cursor: str | None = None,
         limit: int = 100,
     ) -> dict[str, Any]:
+        try:
+            speaker_id = validate_id(speaker_id, "spk_")
+        except ValueError as exc:
+            return _invalid("get_speaker_turns", exc)
+
         try:
             data = self.repo.get_speaker_turns(
                 speaker_id,
@@ -272,6 +365,26 @@ class WatchService:
         )
 
     def create_export(self, transcript_id: str, format: str) -> dict[str, Any]:
+        try:
+            transcript_id = validate_id(transcript_id, "trn_")
+        except ValueError as exc:
+            return _invalid("create_export", exc)
+
+        # INT-04: never export a transcript whose job did not succeed.
+        meta, succeeded = self._succeeded_job_for(transcript_id)
+        if not meta:
+            return safe_error(
+                "create_export",
+                "NOT_FOUND",
+                "Transcript not found.",
+            )
+        if not succeeded:
+            return safe_error(
+                "create_export",
+                "TRANSCRIPT_NOT_FINAL",
+                "This transcript belongs to a job that has not succeeded.",
+            )
+
         try:
             artifact = create_export(
                 self.repo,
@@ -296,6 +409,11 @@ class WatchService:
         source_id: str,
         artifact_type: str | None = None,
     ) -> dict[str, Any]:
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("list_artifacts", exc)
+
         return envelope(
             "list_artifacts",
             {
@@ -308,6 +426,11 @@ class WatchService:
         )
 
     def get_artifact(self, artifact_id: str) -> dict[str, Any]:
+        try:
+            artifact_id = validate_id(artifact_id, "art_")
+        except ValueError as exc:
+            return _invalid("get_artifact", exc)
+
         artifact = self.repo.get_artifact(artifact_id)
         if not artifact:
             return safe_error(
