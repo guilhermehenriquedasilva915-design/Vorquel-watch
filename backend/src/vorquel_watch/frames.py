@@ -55,6 +55,12 @@ class FrameSample:
     change_score: float
     digest: str
     keyframe: bool
+    # The thumbnail travels with the sample because a digest cannot answer
+    # "is this the same screen as one I saw earlier". Lossy codecs re-encode
+    # identical content differently - measured at ~1.8 units of drift across
+    # 95% of pixels after a scene change - so two views of one slide never
+    # produce the same digest. Similarity has to be compared, not hashed.
+    thumbnail: np.ndarray | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +73,7 @@ class ObservationSpan:
     change_score: float
     content_hash: str
     frames_sampled: int
+    thumbnail: np.ndarray | None = None
 
 
 def _import_av():
@@ -192,6 +199,7 @@ def sample_frames(
                 change_score=score,
                 digest=_digest(current),
                 keyframe=bool(frame.key_frame),
+                thumbnail=current,
             )
             emitted += 1
             previous = current
@@ -237,6 +245,7 @@ def group_observations(
                     change_score=round(peak, 6),
                     content_hash=start.digest,
                     frames_sampled=members,
+                    thumbnail=start.thumbnail,
                 )
             )
             start = sample
@@ -255,6 +264,7 @@ def group_observations(
             change_score=round(peak, 6),
             content_hash=start.digest,
             frames_sampled=members,
+            thumbnail=start.thumbnail,
         )
     )
     return spans

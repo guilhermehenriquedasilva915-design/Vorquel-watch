@@ -5,12 +5,40 @@ import unittest
 from vorquel_watch.ids import MAX_SUFFIX_LENGTH, new_id, validate_id
 
 
+# Prefixes the database CHECK constraints require. If a table demands one of
+# these and ids.py does not list it, every insert into that table fails at
+# runtime - which is exactly how the screen pipeline broke before this test
+# existed.
+SCHEMA_REQUIRED_PREFIXES = (
+    "src_",
+    "job_",
+    "run_",
+    "trn_",
+    "seg_",
+    "spk_",
+    "turn_",
+    "art_",
+    "rev_",
+    "obs_",
+    "ocr_",
+)
+
+
 class ValidateIdTests(unittest.TestCase):
     def test_accepts_a_generated_id(self) -> None:
-        for prefix in ("src_", "job_", "trn_", "seg_", "spk_", "turn_", "art_"):
+        for prefix in SCHEMA_REQUIRED_PREFIXES:
             with self.subTest(prefix=prefix):
                 value = new_id(prefix)
                 self.assertEqual(validate_id(value, prefix), value)
+
+    def test_every_prefix_the_schema_requires_can_be_minted(self) -> None:
+        """Guards the allowlist against drifting away from the schema."""
+        for prefix in SCHEMA_REQUIRED_PREFIXES:
+            with self.subTest(prefix=prefix):
+                value = new_id(prefix)
+                self.assertTrue(value.startswith(prefix))
+                # The database checks the first four characters.
+                self.assertEqual(len(prefix), 4 if prefix != "turn_" else 5)
 
     def test_rejects_wrong_prefix(self) -> None:
         value = new_id("job_")

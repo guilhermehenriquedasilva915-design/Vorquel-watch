@@ -20,7 +20,42 @@ EXPECTED_TOOLS = {
     "create_export",
     "list_artifacts",
     "get_artifact",
+    # Screen pipeline (ADR 0002). Still no tool accepts a path or a URL.
+    "get_video_info",
+    "search_screen_text",
+    "get_frame",
+    "get_context_at",
+    "get_context_range",
 }
+
+# Arguments no tool may ever take. The surface is bounded by what does not
+# exist, not by instructions asking the model to behave.
+FORBIDDEN_ARGUMENT_NAMES = {
+    "path",
+    "file_path",
+    "filename",
+    "directory",
+    "output_path",
+    "url",
+    "uri",
+    "command",
+    "shell",
+    "cmd",
+    "script",
+    "api_key",
+    "token",
+    "secret",
+    "password",
+    "credential",
+    "cookie",
+    "cookies",
+    "env",
+}
+
+
+def _schema_of(tool) -> dict:
+    schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None)
+    return schema or {}
 
 
 class McpContractTests(unittest.IsolatedAsyncioTestCase):
@@ -29,6 +64,65 @@ class McpContractTests(unittest.IsolatedAsyncioTestCase):
             result = await client.list_tools()
             names = {tool.name for tool in result.tools}
         self.assertEqual(names, EXPECTED_TOOLS)
+
+    async def test_no_tool_accepts_a_path_url_command_or_secret(self) -> None:
+        """The surface is bounded by what does not exist.
+
+        A model that misreads a hostile transcript still cannot ask this server
+        to open a file, fetch a URL or run a command, because no argument that
+        would carry one is defined anywhere.
+        """
+        async with Client(mcp) as client:
+            tools = (await client.list_tools()).tools
+
+        offences: list[str] = []
+        for tool in tools:
+            properties = _schema_of(tool).get("properties") or {}
+            for argument in properties:
+                if argument.lower() in FORBIDDEN_ARGUMENT_NAMES:
+                    offences.append(f"{tool.name}.{argument}")
+
+        self.assertEqual(offences, [], f"forbidden arguments exposed: {offences}")
+
+    async def test_every_tool_is_documented(self) -> None:
+        async with Client(mcp) as client:
+            tools = (await client.list_tools()).tools
+
+        undocumented = [t.name for t in tools if not (t.description or "").strip()]
+        self.assertEqual(undocumented, [])
+
+    async def test_screen_tools_take_only_opaque_ids_and_timestamps(self) -> None:
+        screen_tools = {
+            "get_video_info",
+            "search_screen_text",
+            "get_frame",
+            "get_context_at",
+            "get_context_range",
+        }
+        allowed = {
+            "source_id",
+            "source_ids",
+            "timestamp_ms",
+            "start_ms",
+            "end_ms",
+            "window_ms",
+            "max_observations",
+            "query",
+            "limit",
+        }
+
+        async with Client(mcp) as client:
+            tools = (await client.list_tools()).tools
+
+        for tool in tools:
+            if tool.name not in screen_tools:
+                continue
+            with self.subTest(tool=tool.name):
+                properties = set(_schema_of(tool).get("properties") or {})
+                self.assertTrue(
+                    properties.issubset(allowed),
+                    f"unexpected arguments: {properties - allowed}",
+                )
 
 
 if __name__ == "__main__":

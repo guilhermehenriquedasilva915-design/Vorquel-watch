@@ -4,6 +4,9 @@ import re
 from uuid import uuid4
 
 
+# Every prefix here has a matching CHECK constraint in the schema. The two must
+# stay in sync: the database rejects an identifier whose prefix it does not
+# recognise, and new_id refuses to mint one this set does not list.
 _ALLOWED_PREFIXES = {
     "src_",
     "job_",
@@ -15,6 +18,9 @@ _ALLOWED_PREFIXES = {
     "art_",
     "rev_",
     "req_",
+    # Screen pipeline (ADR 0002).
+    "obs_",
+    "ocr_",
 }
 
 # Identifiers are opaque handles. Anything outside this alphabet - whitespace,

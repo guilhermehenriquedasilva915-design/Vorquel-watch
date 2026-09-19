@@ -542,6 +542,147 @@ class WatchRepository:
             "next_cursor": _encode_cursor(offset + len(rows)) if len(rows) == limit else None,
         }
 
+    # ---------------------------------------------------------------- screen
+
+    # SEC-07: explicit projections here too. search_vector and any future
+    # internal column stay out of anything an MCP caller can see.
+    _OBSERVATION_COLUMNS = (
+        "observation_id,source_id,job_id,start_ms,end_ms,"
+        "representative_frame_ms,visual_change_score,content_hash,ocr_text,"
+        "ocr_engine,ocr_engine_version,frames_sampled,"
+        "data_trust_class,instruction_authority,created_at"
+    )
+    _TEXT_BLOCK_COLUMNS = (
+        "ocr_id,observation_id,source_id,ordinal,text,confidence,"
+        "bbox_x,bbox_y,bbox_width,bbox_height,"
+        "data_trust_class,instruction_authority"
+    )
+
+    def insert_screen_observations(self, rows: Iterable[dict[str, Any]]) -> None:
+        payload = list(rows)
+        if payload:
+            self.client.table("screen_observations").insert(payload).execute()
+
+    def insert_screen_text_blocks(self, rows: Iterable[dict[str, Any]]) -> None:
+        payload = list(rows)
+        if payload:
+            self.client.table("screen_text_blocks").insert(payload).execute()
+
+    def observation_at(
+        self,
+        source_id: str,
+        timestamp_ms: int,
+    ) -> dict[str, Any] | None:
+        """The observation whose span contains this instant.
+
+        Spans are contiguous and non-overlapping, so at most one matches.
+        """
+        moment = max(0, int(timestamp_ms))
+        result = (
+            self.client.table("screen_observations")
+            .select(self._OBSERVATION_COLUMNS)
+            .eq("source_id", source_id)
+            .lte("start_ms", moment)
+            .gte("end_ms", moment)
+            .order("start_ms", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def observations_in_range(
+        self,
+        source_id: str,
+        *,
+        start_ms: int,
+        end_ms: int,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Every observation overlapping a window, oldest first."""
+        limit = _clamp_limit(limit, 100)
+        result = (
+            self.client.table("screen_observations")
+            .select(self._OBSERVATION_COLUMNS)
+            .eq("source_id", source_id)
+            .gte("end_ms", max(0, int(start_ms)))
+            .lte("start_ms", max(0, int(end_ms)))
+            .order("start_ms")
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+
+    def screen_text_blocks(
+        self,
+        observation_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        limit = _clamp_limit(limit, 200)
+        result = (
+            self.client.table("screen_text_blocks")
+            .select(self._TEXT_BLOCK_COLUMNS)
+            .eq("observation_id", observation_id)
+            .order("ordinal")
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+
+    def segments_in_range(
+        self,
+        source_id: str,
+        *,
+        start_ms: int,
+        end_ms: int,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Transcript segments overlapping a window.
+
+        This is the other half of combined context: what was being said while
+        that screen was visible.
+        """
+        limit = _clamp_limit(limit, 200)
+        result = (
+            self.client.table("transcript_segments")
+            .select(_SEGMENT_MCP_COLUMNS)
+            .eq("source_id", source_id)
+            .gte("end_ms", max(0, int(start_ms)))
+            .lte("start_ms", max(0, int(end_ms)))
+            .order("start_ms")
+            .limit(limit)
+            .execute()
+        )
+        return result.data or []
+
+    def search_screen(
+        self,
+        *,
+        query: str,
+        source_ids: list[str],
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        clean_query = query.strip() if isinstance(query, str) else ""
+        if not clean_query:
+            raise ValueError("query is required")
+        if not source_ids or len(source_ids) > 25:
+            raise ValueError("source_ids must contain between 1 and 25 ids")
+        limit = _clamp_limit(limit, 50)
+
+        result = self.client.rpc(
+            "search_screen_text",
+            {
+                "p_query": clean_query[:500],
+                "p_source_ids": source_ids,
+                "p_start_ms": start_ms,
+                "p_end_ms": end_ms,
+                "p_limit": limit,
+            },
+        ).execute()
+        return result.data or []
+
     def create_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = self.client.table("artifacts").insert(payload).execute()
         return result.data[0]

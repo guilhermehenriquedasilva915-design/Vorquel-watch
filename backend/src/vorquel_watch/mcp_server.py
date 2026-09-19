@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from typing import Any
 
 from mcp.server import MCPServer
+from mcp.types import Annotations, ImageContent, TextContent
 
 from vorquel_watch.service import WatchService
 
@@ -175,6 +177,81 @@ def list_artifacts(
 def get_artifact(artifact_id: str) -> dict[str, Any]:
     """Get artifact metadata only. Local UI/CLI owns file opening."""
     return _service().get_artifact(artifact_id)
+
+
+@mcp.tool()
+def get_video_info(source_id: str) -> dict[str, Any]:
+    """Report which tracks exist for a source: transcript, screen, or both."""
+    return _service().get_video_info(source_id)
+
+
+@mcp.tool()
+def search_screen_text(
+    query: str,
+    source_ids: list[str],
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Search text that appeared on screen, as opposed to what was said."""
+    return _service().search_screen_text(
+        query=query,
+        source_ids=source_ids,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        limit=limit,
+    )
+
+
+@mcp.tool()
+def get_frame(source_id: str, timestamp_ms: int) -> list[Any]:
+    """Return the video frame at a timestamp, as an image plus its provenance.
+
+    The image is located by opaque source_id and timestamp. No filesystem path
+    is accepted or returned.
+    """
+    payload = _service().get_frame(source_id, timestamp_ms)
+    data = payload.get("data") or {}
+    image = data.pop("image_base64", None)
+
+    blocks: list[Any] = [
+        TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))
+    ]
+    if image:
+        blocks.append(
+            ImageContent(
+                type="image",
+                data=image,
+                mime_type=data.get("mime_type", "image/png"),
+                # The frame is media content for the model to look at. It carries
+                # no more authority than the transcript does.
+                annotations=Annotations(audience=["assistant"]),
+            )
+        )
+    return blocks
+
+
+@mcp.tool()
+def get_context_at(
+    source_id: str,
+    timestamp_ms: int,
+    window_ms: int = 15000,
+) -> dict[str, Any]:
+    """Get what was being said and what was on screen at one instant."""
+    return _service().get_context_at(source_id, timestamp_ms, window_ms)
+
+
+@mcp.tool()
+def get_context_range(
+    source_id: str,
+    start_ms: int,
+    end_ms: int,
+    max_observations: int = 20,
+) -> dict[str, Any]:
+    """Get speech and screen across a window, aligned on one timeline."""
+    return _service().get_context_range(
+        source_id, start_ms, end_ms, max_observations
+    )
 
 
 def main() -> None:

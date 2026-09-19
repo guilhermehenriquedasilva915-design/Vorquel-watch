@@ -425,6 +425,207 @@ class WatchService:
             contains_untrusted_content=True,
         )
 
+    # ----------------------------------------------------------------- screen
+
+    def get_video_info(self, source_id: str) -> dict[str, Any]:
+        """What tracks exist for a source: transcript, screen, or both."""
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("get_video_info", exc)
+
+        source = self.repo.get_source(source_id)
+        if not source:
+            return safe_error("get_video_info", "NOT_FOUND", "Source not found.")
+
+        observations = self.repo.observations_in_range(
+            source_id, start_ms=0, end_ms=int(source.get("duration_ms") or 0), limit=100
+        )
+        return envelope(
+            "get_video_info",
+            {
+                "source": source,
+                "has_screen_track": bool(observations),
+                "observations_sampled": len(observations),
+                "transcript_id": source.get("latest_transcript_id"),
+            },
+            contains_untrusted_content=True,
+        )
+
+    def search_screen_text(
+        self,
+        query: str,
+        source_ids: list[str],
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Search what appeared on screen, as opposed to what was said."""
+        try:
+            if not isinstance(source_ids, list) or not source_ids:
+                raise ValueError("source_ids must be a non-empty list")
+            if len(source_ids) > MAX_SEARCH_SOURCE_IDS:
+                raise ValueError(
+                    f"source_ids must contain at most {MAX_SEARCH_SOURCE_IDS} ids"
+                )
+            source_ids = [validate_id(value, "src_") for value in source_ids]
+        except ValueError as exc:
+            return _invalid("search_screen_text", exc)
+
+        try:
+            rows = self.repo.search_screen(
+                query=query,
+                source_ids=source_ids,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                limit=limit,
+            )
+        except ValueError as exc:
+            return safe_error("search_screen_text", "INVALID_ARGUMENT", str(exc))
+        return envelope(
+            "search_screen_text", {"items": rows}, contains_untrusted_content=True
+        )
+
+    def get_frame(self, source_id: str, timestamp_ms: int) -> dict[str, Any]:
+        """Return the frame at a timestamp as base64 PNG.
+
+        The image is read from local media by content hash; no host path is
+        accepted from, or returned to, the caller.
+        """
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("get_frame", exc)
+        try:
+            moment = int(timestamp_ms)
+        except (TypeError, ValueError):
+            return safe_error(
+                "get_frame", "INVALID_ARGUMENT", "timestamp_ms must be an integer."
+            )
+        if moment < 0:
+            return safe_error(
+                "get_frame", "INVALID_ARGUMENT", "timestamp_ms must not be negative."
+            )
+
+        source = self.repo.get_source(source_id)
+        if not source:
+            return safe_error("get_frame", "NOT_FOUND", "Source not found.")
+        if not source.get("has_video"):
+            return safe_error(
+                "get_frame", "NO_VIDEO_TRACK", "This source has no video track."
+            )
+
+        from base64 import b64encode
+
+        from vorquel_watch.frames import frame_at
+        from vorquel_watch.local_storage import IntegrityError, LocalStorage
+
+        storage = LocalStorage(self.settings.data_dir)
+        try:
+            media_path = storage.verify_object(source["content_sha256"])
+            png, actual_ms = frame_at(media_path, moment)
+        except IntegrityError:
+            return safe_error(
+                "get_frame", "MEDIA_UNAVAILABLE", "Local media failed verification."
+            )
+        except ValueError as exc:
+            return safe_error("get_frame", "INVALID_ARGUMENT", str(exc))
+
+        return envelope(
+            "get_frame",
+            {
+                "source_id": source_id,
+                "requested_ms": moment,
+                "actual_ms": actual_ms,
+                "mime_type": "image/png",
+                "byte_size": len(png),
+                "image_base64": b64encode(png).decode("ascii"),
+            },
+            contains_untrusted_content=True,
+        )
+
+    def get_context_at(
+        self,
+        source_id: str,
+        timestamp_ms: int,
+        window_ms: int = 15000,
+    ) -> dict[str, Any]:
+        """What was said and what was on screen at one instant."""
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("get_context_at", exc)
+        try:
+            moment = max(0, int(timestamp_ms))
+            window = max(1000, min(int(window_ms), 120000))
+        except (TypeError, ValueError):
+            return safe_error(
+                "get_context_at", "INVALID_ARGUMENT", "timestamps must be integers."
+            )
+
+        observation = self.repo.observation_at(source_id, moment)
+        blocks = (
+            self.repo.screen_text_blocks(observation["observation_id"])
+            if observation
+            else []
+        )
+        segments = self.repo.segments_in_range(
+            source_id,
+            start_ms=max(0, moment - window // 2),
+            end_ms=moment + window // 2,
+        )
+
+        return envelope(
+            "get_context_at",
+            {
+                "source_id": source_id,
+                "timestamp_ms": moment,
+                "transcript": segments,
+                "screen_observation": observation,
+                "screen_text": blocks,
+            },
+            contains_untrusted_content=True,
+        )
+
+    def get_context_range(
+        self,
+        source_id: str,
+        start_ms: int,
+        end_ms: int,
+        max_observations: int = 20,
+    ) -> dict[str, Any]:
+        """Speech and screen across a window, aligned on one timeline."""
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("get_context_range", exc)
+        try:
+            start = max(0, int(start_ms))
+            end = max(start, int(end_ms))
+            cap = max(1, min(int(max_observations), 100))
+        except (TypeError, ValueError):
+            return safe_error(
+                "get_context_range", "INVALID_ARGUMENT", "timestamps must be integers."
+            )
+
+        observations = self.repo.observations_in_range(
+            source_id, start_ms=start, end_ms=end, limit=cap
+        )
+        segments = self.repo.segments_in_range(
+            source_id, start_ms=start, end_ms=end
+        )
+        return envelope(
+            "get_context_range",
+            {
+                "source_id": source_id,
+                "start_ms": start,
+                "end_ms": end,
+                "transcript": segments,
+                "screen_observations": observations,
+            },
+            contains_untrusted_content=True,
+        )
+
     def get_artifact(self, artifact_id: str) -> dict[str, Any]:
         try:
             artifact_id = validate_id(artifact_id, "art_")
