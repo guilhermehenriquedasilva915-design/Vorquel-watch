@@ -841,6 +841,123 @@ class WatchRepository:
         ).execute()
         return result.data or []
 
+
+    # -------------------------------------------------------------- knowledge
+
+    def create_knowledge_candidate(
+        self,
+        *,
+        candidate_id: str,
+        source_id: str,
+        knowledge_type: str,
+        domain: str,
+        title: str,
+        summary: str,
+        epistemic_status: str,
+        content_hash: str,
+        provenance: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        result = self.client.rpc(
+            "create_knowledge_candidate",
+            {
+                "p_candidate_id": candidate_id,
+                "p_source_id": source_id,
+                "p_knowledge_type": knowledge_type,
+                "p_domain": domain,
+                "p_title": title,
+                "p_summary": summary,
+                "p_epistemic_status": epistemic_status,
+                "p_content_hash": content_hash,
+                "p_provenance": provenance,
+            },
+        ).execute()
+        rows = result.data or []
+        if isinstance(rows, dict):
+            return rows
+        if not rows:
+            raise RuntimeError("knowledge candidate write returned no row")
+        return rows[0]
+
+    def approve_knowledge_candidate(
+        self,
+        *,
+        candidate_id: str,
+        review_id: str,
+        knowledge_id: str,
+        note: str | None,
+    ) -> dict[str, Any]:
+        result = self.client.rpc(
+            "approve_knowledge_candidate",
+            {
+                "p_candidate_id": candidate_id,
+                "p_review_id": review_id,
+                "p_knowledge_id": knowledge_id,
+                "p_note": note,
+            },
+        ).execute()
+        rows = result.data or []
+        if isinstance(rows, dict):
+            return rows
+        if not rows:
+            raise RuntimeError("knowledge approval returned no row")
+        return rows[0]
+
+    def reject_knowledge_candidate(
+        self,
+        *,
+        candidate_id: str,
+        review_id: str,
+        note: str | None,
+    ) -> dict[str, Any]:
+        result = self.client.rpc(
+            "reject_knowledge_candidate",
+            {
+                "p_candidate_id": candidate_id,
+                "p_review_id": review_id,
+                "p_note": note,
+            },
+        ).execute()
+        rows = result.data or []
+        if isinstance(rows, dict):
+            return rows
+        if not rows:
+            raise RuntimeError("knowledge rejection returned no row")
+        return rows[0]
+
+    def list_knowledge_candidates(
+        self,
+        *,
+        source_id: str | None,
+        status: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        result = self.client.rpc(
+            "list_knowledge_candidates",
+            {
+                "p_source_id": source_id,
+                "p_status": status,
+                "p_limit": int(limit),
+            },
+        ).execute()
+        return result.data or []
+
+    def search_knowledge_items(
+        self,
+        *,
+        query: str,
+        domain: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        result = self.client.rpc(
+            "search_knowledge_items",
+            {
+                "p_query": query,
+                "p_domain": domain,
+                "p_limit": int(limit),
+            },
+        ).execute()
+        return result.data or []
+
     def create_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = self.client.table("artifacts").insert(payload).execute()
         return result.data[0]
