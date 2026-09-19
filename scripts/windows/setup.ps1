@@ -14,7 +14,10 @@ if (-not (Test-Path $Python)) {
     $BasePython = $null
     $BasePythonArgs = @()
 
+    $LocalPython312 = Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"
+
     $Candidates = @(
+        @{ Command = $LocalPython312; Args = @() },
         @{ Command = "py"; Args = @("-3.12") },
         @{ Command = "python3.12"; Args = @() },
         @{ Command = "python"; Args = @() },
@@ -23,11 +26,17 @@ if (-not (Test-Path $Python)) {
 
     foreach ($Candidate in $Candidates) {
         $Resolved = Get-Command $Candidate.Command -ErrorAction SilentlyContinue
-        if (-not $Resolved) {
+        if (-not $Resolved -and -not (Test-Path -LiteralPath $Candidate.Command)) {
             continue
         }
 
-        $Command = if ($Candidate.Command -eq "py") { "py" } else { $Resolved.Source }
+        $Command = if (Test-Path -LiteralPath $Candidate.Command) {
+            $Candidate.Command
+        } elseif ($Candidate.Command -eq "py") {
+            "py"
+        } else {
+            $Resolved.Source
+        }
         & $Command @($Candidate.Args) -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,12) else 1)" 2>$null
 
         if ($LASTEXITCODE -eq 0) {
