@@ -41,6 +41,18 @@ jobs:
       - name: Full runtime must be importable
         run: python -c "import av, faster_whisper, rapidocr, yt_dlp, vorquel_watch.mcp_server"
 
+      - name: Logging hardening tests
+        continue-on-error: true
+        run: python backend/tests/test_logging.py
+
+      - name: Resource limit tests
+        continue-on-error: true
+        run: python backend/tests/test_resource_limits.py
+
+      - name: Screen worker tests
+        continue-on-error: true
+        run: python backend/tests/test_worker_screen.py
+
       - name: Unit tests
         run: python scripts/ci/run_tests.py
 
