@@ -77,6 +77,13 @@ class WatchService:
                 "planned_modes": ["STANDARD", "SPEAKERS"],
                 "exports": ["TXT", "MARKDOWN", "JSON", "SRT", "VTT"],
                 "search": "POSTGRES_FTS",
+                "screen": {
+                    "enabled": bool(getattr(self.settings, "screen_enabled", False)),
+                    "applies_to": "sources with a video track",
+                    "produces": ["screen_observations", "ocr_text", "frames"],
+                    "search": "POSTGRES_FTS",
+                    "frame_retrieval": "by timestamp, returned as an image",
+                },
                 "ingest": {
                     "local_cli": True,
                     "mcp_path_input": False,

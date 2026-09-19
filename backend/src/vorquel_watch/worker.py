@@ -55,6 +55,7 @@ def process_one(
 
         repo.update_job(job_id, {"stage": "INDEXING", "progress_permille": 930})
         persist_transcription(repo, transcript, rows)
+        _run_screen_pass(repo, engine.settings, claimed, worker_id, lease_seconds)
         # Atomic: provenance revalidated, source pointers and terminal status
         # written in one transaction. Raises if the job stopped being RUNNING,
         # so a cancellation that landed mid-persist is never overwritten.
@@ -92,6 +93,77 @@ def process_one(
             },
         )
     return True
+
+
+def _run_screen_pass(
+    repo: WatchRepository,
+    settings,
+    job: dict,
+    worker_id: str,
+    lease_seconds: int,
+) -> None:
+    """Read the screen track, if this source has one.
+
+    Runs inside the same job as transcription so one ingest produces both
+    tracks on one timeline. An audio-only source skips it entirely and pays
+    nothing.
+    """
+    if not getattr(settings, "screen_enabled", True):
+        return
+
+    source = repo.get_source(job["source_id"])
+    if not source or not source.get("has_video"):
+        return
+
+    from vorquel_watch.local_storage import LocalStorage
+    from vorquel_watch.ocr import OcrUnavailable
+    from vorquel_watch.screen_pipeline import ScreenCancelled, build_screen_observations
+
+    try:
+        repo.update_job(
+            job["job_id"], {"stage": "MERGING", "progress_permille": 950}
+        )
+        storage = LocalStorage(settings.data_dir)
+        # SEC-04 applies to the screen pass too: the object is re-hashed before
+        # it is read. This sits inside the try because a corrupted object must
+        # not cost the transcript either.
+        media_path = storage.verify_object(source["content_sha256"])
+
+        result = build_screen_observations(
+            media_path,
+            source_id=source["source_id"],
+            job_id=job["job_id"],
+            interval_ms=settings.screen_interval_ms,
+            change_threshold=settings.screen_change_threshold,
+            max_observations=settings.screen_max_observations,
+            keepalive=lambda: repo.heartbeat(job["job_id"], worker_id, lease_seconds),
+        )
+
+        repo.insert_screen_observations(result.observations)
+        for start in range(0, len(result.text_blocks), 500):
+            repo.insert_screen_text_blocks(result.text_blocks[start : start + 500])
+
+        LOG.info(
+            "Screen pass: %d observations from %d sampled frames, "
+            "%d OCR runs, %d reused",
+            result.observations_kept,
+            result.frames_sampled,
+            result.ocr_runs,
+            result.ocr_reused,
+        )
+    except ScreenCancelled:
+        # Losing the job is not a screen failure: it must stop the whole job.
+        raise JobCancelled() from None
+    except OcrUnavailable:
+        LOG.warning("Screen OCR unavailable; completing with transcript only")
+    except Exception as exc:
+        # The transcript is the job's primary product and it already succeeded.
+        # Failing the whole job here would throw away hours of completed
+        # transcription because of a fault in an enhancement, which is strictly
+        # worse than completing with one track. The failure is recorded, not
+        # hidden; surfacing it on the job row is follow-up work.
+        LOG.exception("Screen pass failed (%s); completing with transcript only",
+                      type(exc).__name__)
 
 
 def run_worker(

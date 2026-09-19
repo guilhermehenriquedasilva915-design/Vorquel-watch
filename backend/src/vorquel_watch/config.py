@@ -132,6 +132,13 @@ class Settings:
     whisper_model_revision: str | None = None
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
+    # Screen pipeline (ADR 0002). Enabled for sources that carry video; an
+    # audio-only source never pays for it. The interval and threshold are the
+    # measured defaults, not guesses: see docs/adr/0002.
+    screen_enabled: bool = True
+    screen_interval_ms: int = 1500
+    screen_change_threshold: float = 0.08
+    screen_max_observations: int = 4000
     pipeline_version: str = "watch-alpha/0.1"
 
     @classmethod
@@ -175,6 +182,19 @@ class Settings:
             whisper_compute_type=os.environ.get(
                 "VORQUEL_WATCH_WHISPER_COMPUTE_TYPE", "int8"
             ).strip(),
+            screen_enabled=os.environ.get(
+                "VORQUEL_WATCH_SCREEN_ENABLED", "1"
+            ).strip()
+            not in {"0", "false", "False", "no"},
+            screen_interval_ms=int(
+                os.environ.get("VORQUEL_WATCH_SCREEN_INTERVAL_MS", "1500")
+            ),
+            screen_change_threshold=float(
+                os.environ.get("VORQUEL_WATCH_SCREEN_CHANGE_THRESHOLD", "0.08")
+            ),
+            screen_max_observations=int(
+                os.environ.get("VORQUEL_WATCH_SCREEN_MAX_OBSERVATIONS", "4000")
+            ),
             pipeline_version=os.environ.get(
                 "VORQUEL_WATCH_PIPELINE_VERSION", "watch-alpha/0.1"
             ).strip(),
