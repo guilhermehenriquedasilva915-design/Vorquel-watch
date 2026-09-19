@@ -82,7 +82,8 @@ class WatchService:
                     "applies_to": "sources with a video track",
                     "produces": ["screen_observations", "ocr_text", "frames"],
                     "search": "POSTGRES_FTS",
-                    "frame_retrieval": "by timestamp, returned as an image",
+                    "mcp_dedicated_tools": False,
+                    "exposure": "local control plane/UI only in V1",
                 },
                 "ingest": {
                     "local_cli": True,
