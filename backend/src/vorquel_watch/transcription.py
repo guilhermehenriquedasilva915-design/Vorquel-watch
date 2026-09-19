@@ -78,6 +78,9 @@ class FasterWhisperEngine:
         self,
         repo: WatchRepository,
         job: dict[str, Any],
+        *,
+        worker_id: str | None = None,
+        lease_seconds: int = 120,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if job["mode"] != "FAST":
             raise ValueError("only FAST mode is available in the alpha")
@@ -121,8 +124,16 @@ class FasterWhisperEngine:
         }
 
         for ordinal, segment in enumerate(segments_iter):
-            if ordinal % 25 == 0 and repo.is_cancelled(job["job_id"]):
-                raise JobCancelled()
+            if ordinal % 25 == 0:
+                # One call does both jobs: it renews the lease so this work is
+                # not reclaimed as dead, and it reports whether the job is still
+                # ours. False means cancelled, finished, or taken by another
+                # worker - in every case, stop.
+                if worker_id is not None:
+                    if not repo.heartbeat(job["job_id"], worker_id, lease_seconds):
+                        raise JobCancelled()
+                elif repo.is_cancelled(job["job_id"]):
+                    raise JobCancelled()
 
             text = (segment.text or "").strip()
             if not text:

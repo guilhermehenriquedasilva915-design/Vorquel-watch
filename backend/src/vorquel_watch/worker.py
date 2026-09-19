@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import logging
 import time
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from vorquel_watch.config import Settings
-from vorquel_watch.db import WatchRepository
+from vorquel_watch.db import DEFAULT_LEASE_SECONDS, WatchRepository
 from vorquel_watch.transcription import (
     FasterWhisperEngine,
     JobCancelled,
@@ -20,28 +21,39 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def new_worker_id() -> str:
+    """An opaque per-process identity.
+
+    Deliberately not the hostname or the pid: worker ids end up in the database
+    and in logs, and neither needs to carry anything about the machine.
+    """
+    return f"wkr_{uuid4().hex}"
+
+
 def process_one(
     repo: WatchRepository,
     engine: FasterWhisperEngine,
+    worker_id: str,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
 ) -> bool:
-    queued = repo.get_next_queued_job()
-    if not queued:
-        return False
-
-    claimed = repo.claim_job(queued["job_id"])
+    claimed = repo.claim_next_job(worker_id, lease_seconds)
     if not claimed:
-        return True
+        return False
 
     job_id = claimed["job_id"]
     try:
-        transcript, rows = engine.transcribe_job(repo, claimed)
-        if repo.is_cancelled(job_id):
+        transcript, rows = engine.transcribe_job(
+            repo, claimed, worker_id=worker_id, lease_seconds=lease_seconds
+        )
+
+        # Confirm the lease still belongs to us before writing anything. A
+        # cancellation or a reclaim during transcription means this result is no
+        # longer ours to record.
+        if not repo.heartbeat(job_id, worker_id, lease_seconds):
+            LOG.info("Lease lost before persist; discarding result")
             return True
 
-        repo.update_job(
-            job_id,
-            {"stage": "INDEXING", "progress_permille": 930},
-        )
+        repo.update_job(job_id, {"stage": "INDEXING", "progress_permille": 930})
         persist_transcription(repo, transcript, rows)
         # Atomic: provenance revalidated, source pointers and terminal status
         # written in one transaction. Raises if the job stopped being RUNNING,
@@ -82,14 +94,21 @@ def process_one(
     return True
 
 
-def run_worker(*, once: bool = False, poll_seconds: float = 2.0) -> None:
+def run_worker(
+    *,
+    once: bool = False,
+    poll_seconds: float = 2.0,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+) -> None:
     settings = Settings.from_env()
     repo = WatchRepository(settings)
     repo.healthcheck()
     engine = FasterWhisperEngine(settings)
+    worker_id = new_worker_id()
+    LOG.info("Worker started (lease %ss)", lease_seconds)
 
     while True:
-        worked = process_one(repo, engine)
+        worked = process_one(repo, engine, worker_id, lease_seconds)
         if once:
             return
         if not worked:

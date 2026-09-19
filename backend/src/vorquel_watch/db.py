@@ -34,6 +34,12 @@ def _clamp_limit(value: int, maximum: int = 200) -> int:
     return max(1, min(int(value), maximum))
 
 
+# How long a claimed job stays this worker's before another may reclaim it.
+# Long enough that an ordinary pause between heartbeats is not mistaken for a
+# dead worker, short enough that a crash does not strand a job for long.
+DEFAULT_LEASE_SECONDS = 120
+
+
 # SEC-07. The explicit projection for segment data leaving the process toward
 # an MCP client. raw_text is deliberately absent: it is the pre-review original
 # and is not part of the MCP surface, callers receive effective_text. words is
@@ -218,33 +224,54 @@ class WatchRepository:
         )
         return result.data[0] if result.data else None
 
-    def get_next_queued_job(self) -> dict[str, Any] | None:
-        result = (
-            self.client.table("processing_jobs")
-            .select("*")
-            .eq("status", "QUEUED")
-            .order("created_at")
-            .limit(1)
-            .execute()
-        )
-        return result.data[0] if result.data else None
+    def claim_next_job(
+        self,
+        worker_id: str,
+        lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    ) -> dict[str, Any] | None:
+        """Take the next queued job, or reclaim one whose worker died.
 
-    def claim_job(self, job_id: str) -> dict[str, Any] | None:
-        result = (
-            self.client.table("processing_jobs")
-            .update(
-                {
-                    "status": "RUNNING",
-                    "stage": "TRANSCRIBING",
-                    "progress_permille": 10,
-                    "started_at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            .eq("job_id", job_id)
-            .eq("status", "QUEUED")
-            .execute()
-        )
-        return result.data[0] if result.data else None
+        The database picks and locks the row with FOR UPDATE SKIP LOCKED, so two
+        workers never receive the same job, and a RUNNING job whose lease has
+        expired becomes available again. Without this a worker that died
+        mid-persist left the job RUNNING forever and create_or_reuse_job kept
+        handing that dead job back.
+        """
+        result = self.client.rpc(
+            "claim_next_job",
+            {"p_worker_id": worker_id, "p_lease_seconds": int(lease_seconds)},
+        ).execute()
+
+        job = result.data
+        if isinstance(job, list):
+            job = job[0] if job else None
+        # An empty queue comes back as a composite whose columns are all NULL,
+        # so presence of the row is not enough: the identifier decides.
+        if not isinstance(job, dict) or not job.get("job_id"):
+            return None
+        return job
+
+    def heartbeat(
+        self,
+        job_id: str,
+        worker_id: str,
+        lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    ) -> bool:
+        """Extend this worker's lease. False means stop working on the job.
+
+        False covers every way a worker can lose a job: the lease expired and
+        another worker reclaimed it, or the job was cancelled or finished. The
+        caller must not keep processing after a false.
+        """
+        result = self.client.rpc(
+            "heartbeat_job",
+            {
+                "p_job_id": job_id,
+                "p_worker_id": worker_id,
+                "p_lease_seconds": int(lease_seconds),
+            },
+        ).execute()
+        return bool(result.data)
 
     def update_job(
         self,
