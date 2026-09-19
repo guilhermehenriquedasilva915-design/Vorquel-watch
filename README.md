@@ -2,10 +2,10 @@
 
 Private implementation repository for Vorquel Watch / Content Brain.
 
-Give it a workshop recording — a local file or a YouTube link — and it listens
-to everything said, watches what happens on screen, reads the text that appears
-there, and lines the two up on one timeline so Claude can answer questions about
-both at once.
+Give it a local workshop recording and it transcribes what was said while the
+local worker can also build a timestamped screen/OCR track. The V1 Claude MCP
+surface remains the frozen 14-tool contract; dedicated screen/frame MCP tools
+and URL ingest are deferred until a separate architecture decision.
 
 > "When he says this is the flow that receives the lead, the screen shows an n8n
 > workflow containing Webhook, Normalize Lead, Supabase and Follow-up."
@@ -15,13 +15,12 @@ both at once.
 | Area | State |
 |---|---|
 | Local file ingest | Implemented |
-| YouTube ingest | Implemented, **never run against a real URL** |
 | Transcription (FAST) | Implemented, **never run end to end** |
 | Screen tracking, change detection, dedupe | Implemented, measured on synthetic fixtures |
 | OCR | Implemented, measured on synthetic fixtures |
 | Frame retrieval by timestamp | Implemented and measured |
 | Combined speech + screen context | Implemented |
-| MCP surface | 19 tools, contract-tested |
+| MCP surface | 14 frozen tools, contract-tested |
 | Security and database integrity | Complete, verified against the live project |
 | Long-video resume | Job-level recovery only; no mid-job resume |
 | STANDARD / SPEAKERS / local UI | Not implemented |
@@ -33,13 +32,12 @@ synthetic fixtures, which is not the same thing.
 ### Data flow
 
 ```
-local file ──┐
-             ├─> Source Guard ─> content-addressed local storage
-YouTube URL ─┘                            │
-                                          ├─> Faster-Whisper ─> transcript segments
-                                          └─> sample / change detect / OCR ─> screen observations
-                                                          │
-                          Claude Desktop ─> local MCP ─> structured data + frames
+local file ─────> Source Guard ─> content-addressed local storage
+                                           │
+                                           ├─> Faster-Whisper ─> transcript segments
+                                           └─> sample / change detect / OCR ─> screen observations
+                                                           │
+                           Claude Desktop ─> frozen local MCP ─> bounded transcript/provenance data
 ```
 
 Raw media stays on the machine. Supabase holds structured metadata,
@@ -63,34 +61,33 @@ Merge the snippet from `%LOCALAPPDATA%\VorquelWatch\claude-mcp.json` into Claude
 Desktop and restart it. The snippet carries no secret; the MCP process reads the
 credential from the OS store itself.
 
-Optional extras: `screen` (OCR) and `youtube` (yt-dlp). A transcript-only
-install carries neither.
+The Windows V1 setup installs the reviewed hash-locked runtime including
+screen/OCR. URL/network ingest is not installed or exposed in V1.
 
 ## Using it
 
 ```powershell
 vorquel-watch ingest C:\path\to\workshop.mp4
-vorquel-watch ingest-url https://www.youtube.com/watch?v=VIDEO_ID
 ```
 
-Both return an opaque `source_id`. Paths and URLs are accepted here, in the
-local control plane, and nowhere else — no MCP tool takes either.
+The command returns an opaque `source_id`. The filesystem path is accepted
+only by the local control plane; no MCP tool accepts a path or URL.
 
 Then ask Claude about that `source_id`. The questions it can answer:
 
 | Question | Tools |
 |---|---|
+| Question | Frozen V1 tools |
+|---|---|
 | What was said about X? | `search_transcript` |
-| When does X actually appear on screen? | `search_screen_text` |
-| What was said *and* shown at this moment? | `get_context_at` |
-| What happened across this stretch? | `get_context_range` |
-| Show me the screen at this timestamp | `get_frame` |
+| Open the relevant spoken context | `get_segment` / `get_transcript` |
+| Inspect source/job/provenance | `get_source` / `get_job` |
 
-`search_transcript` and `search_screen_text` answer different questions: someone
-can mention a tool without showing it, or show it without naming it. Comparing
-them is how you find which tools were demonstrated rather than just discussed.
+The worker may persist screen/OCR observations, but V1 does not expose new
+screen-specific MCP tools. Screen review belongs to the local control plane/UI
+until an explicit architecture decision changes the frozen MCP contract.
 
-See `docs/runbook/workshop-analysis.md` for the full procedure.
+See `docs/runbook/workshop-analysis.md` for the current procedure.
 
 ### Credential management
 
@@ -122,7 +119,6 @@ before touching `pyproject.toml`.
 
 - No real recording has been processed, so there are no accuracy or throughput
   numbers for anything.
-- No YouTube video has actually been downloaded.
 - OCR was measured on synthetic renders with clean text. Real frames carry
   compression artifacts and scaling that those fixtures do not.
 - A reclaimed job restarts from the beginning; there is no mid-job resume, so a
@@ -141,7 +137,8 @@ before touching `pyproject.toml`.
 | `SECURITY.md` | Trust boundary and the controls that enforce it |
 | `docs/runbook/workshop-analysis.md` | Analysing a recording, end to end |
 | `docs/runbook/windows-claude-desktop.md` | Windows setup and Claude Desktop |
-| `docs/adr/0002-screen-pipeline-and-mcp-extension.md` | Why the screen track exists and how the MCP surface grew |
+| `docs/adr/0002-screen-pipeline-and-mcp-extension.md` | Historical screen/MCP proposal; partly superseded |
+| `docs/adr/0003-restore-frozen-mcp-and-defer-url-ingest.md` | Restores the frozen V1 boundary |
 | `docs/media-sandbox.md` | What media isolation guarantees, and what it does not |
 | `docs/dependencies.md` | Lock file, audit, SBOM, media stack CVE position |
 | `docs/threat-model/v1.md` | Threats and the status of each control |
