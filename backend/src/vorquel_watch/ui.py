@@ -120,6 +120,7 @@ class VorquelWatchUI:
         self.candidates.column("title", width=420)
         self.candidates.column("source", width=280)
         self.candidates.pack(fill="both", expand=True)
+        self.candidates.bind("<Double-1>", self.show_candidate_details)
 
         search = ttk.Frame(brain)
         search.pack(fill="x", pady=(8, 0))
@@ -241,6 +242,15 @@ class VorquelWatchUI:
             on_success=lambda data: self._after_review(data, "Candidate rejeitado."),
         )
 
+    def show_candidate_details(self, _event=None) -> None:
+        candidate_id = self._selected_candidate_id()
+        if not candidate_id:
+            return
+        candidate = self.pending_by_id.get(candidate_id)
+        if not candidate:
+            return
+        self._show_json({"candidate": candidate}, "Candidate selecionado.")
+
     def search_knowledge(self) -> None:
         query = self.search_var.get().strip()
         if not query:
@@ -352,13 +362,16 @@ class VorquelWatchUI:
 
         def worker() -> None:
             command = [sys.executable, "-m", "vorquel_watch.cli", *args]
+            child_env = os.environ.copy()
+            child_env["PYTHONIOENCODING"] = "utf-8"
             try:
                 completed = subprocess.run(
                     command,
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
-                    errors="replace",
+                    errors="strict",
+                    env=child_env,
                     check=False,
                 )
             except Exception as exc:
