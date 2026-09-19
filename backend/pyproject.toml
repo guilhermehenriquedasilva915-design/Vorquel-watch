@@ -23,12 +23,6 @@ transcribe = [
 screen = [
   "rapidocr==3.9.2",
 ]
-# YouTube ingest. Separate because it is the only component that reaches the
-# public network, and an install that never ingests a URL should not carry it.
-youtube = [
-  "yt-dlp==2026.8.19",
-]
-
 [project.scripts]
 vorquel-watch = "vorquel_watch.cli:main"
 vorquel-watch-mcp = "vorquel_watch.mcp_server:main"
