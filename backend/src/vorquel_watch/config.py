@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import re
 from pathlib import Path
 
 from vorquel_watch import credentials
@@ -67,6 +68,59 @@ def _resolve_secret(data_dir: Path) -> str:
     return (stored or "").strip()
 
 
+# SEC-05: a logical model name is not an identity. faster-whisper resolves
+# "small" to the Systran/faster-whisper-small repository, whose contents can
+# change upstream at any time, so a name alone lets the weights be swapped
+# underneath a completed transcript without anything in the provenance moving.
+#
+# Each supported model is pinned to an exact upstream commit. Revisions were
+# read from the HuggingFace API; both repositories were last modified
+# 2023-11-23.
+#
+# A branch or tag is not accepted as a revision: "main" can move, which is the
+# whole failure mode being closed here. Only a full commit hash qualifies.
+_REVISION_PATTERN = re.compile(r"\A[0-9a-f]{40}\Z")
+
+PINNED_MODEL_REVISIONS: dict[str, tuple[str, str]] = {
+    "small": (
+        "Systran/faster-whisper-small",
+        "536b0662742c02347bc0e980a01041f333bce120",
+    ),
+    "base": (
+        "Systran/faster-whisper-base",
+        "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
+    ),
+}
+
+
+def resolve_model_pin(model: str, revision: str | None) -> tuple[str, str]:
+    """Return (repository_id, revision) for a model, or refuse.
+
+    Fails closed. An unrecognised model without an explicit revision is
+    rejected rather than downloaded at whatever HEAD happens to be, because a
+    silent model change invalidates every transcript produced afterwards.
+    """
+    name = (model or "").strip()
+    if not name:
+        raise RuntimeError("no transcription model configured")
+
+    pinned = (revision or "").strip()
+    if pinned:
+        if not _REVISION_PATTERN.match(pinned):
+            raise RuntimeError("model revision must be a 40-character commit hash")
+        repository = PINNED_MODEL_REVISIONS.get(name, (name, ""))[0]
+        return repository, pinned
+
+    known = PINNED_MODEL_REVISIONS.get(name)
+    if known is None:
+        raise RuntimeError(
+            f"model {name!r} has no pinned revision. Set "
+            "VORQUEL_WATCH_WHISPER_MODEL_REVISION to an exact commit hash, or "
+            "choose a model with a pin recorded in config."
+        )
+    return known
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     data_dir: Path
@@ -75,6 +129,7 @@ class Settings:
     max_source_bytes: int = 25 * 1024 * 1024 * 1024
     max_duration_ms: int = 8 * 60 * 60 * 1000
     whisper_model: str = "small"
+    whisper_model_revision: str | None = None
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
     pipeline_version: str = "watch-alpha/0.1"
@@ -113,6 +168,10 @@ class Settings:
             whisper_device=os.environ.get(
                 "VORQUEL_WATCH_WHISPER_DEVICE", "cpu"
             ).strip(),
+            whisper_model_revision=(
+                os.environ.get("VORQUEL_WATCH_WHISPER_MODEL_REVISION", "").strip()
+                or None
+            ),
             whisper_compute_type=os.environ.get(
                 "VORQUEL_WATCH_WHISPER_COMPUTE_TYPE", "int8"
             ).strip(),

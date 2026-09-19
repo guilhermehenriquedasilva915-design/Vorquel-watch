@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from importlib.metadata import version as package_version
 from typing import Any
 
-from vorquel_watch.config import Settings
+from vorquel_watch.config import Settings, resolve_model_pin
 from vorquel_watch.db import WatchRepository
 from vorquel_watch.ids import new_id
 from vorquel_watch.local_storage import LocalStorage
@@ -14,10 +14,24 @@ class JobCancelled(Exception):
     pass
 
 
+def _package_version(name: str) -> str:
+    try:
+        return package_version(name)
+    except Exception:
+        return "unknown"
+
+
 @dataclass(slots=True)
 class FasterWhisperEngine:
     settings: Settings
     _model: Any = None
+
+    def model_pin(self) -> tuple[str, str]:
+        """Resolve the exact model repository and commit this engine will use."""
+        return resolve_model_pin(
+            self.settings.whisper_model,
+            self.settings.whisper_model_revision,
+        )
 
     def _load_model(self):
         if self._model is not None:
@@ -32,13 +46,33 @@ class FasterWhisperEngine:
 
         storage = LocalStorage(self.settings.data_dir)
         storage.ensure()
+
+        # SEC-05: load the repository at an exact commit. Passing the logical
+        # name alone would let upstream replace the weights between runs.
+        repository, revision = self.model_pin()
         self._model = WhisperModel(
-            self.settings.whisper_model,
+            repository,
+            revision=revision,
             device=self.settings.whisper_device,
             compute_type=self.settings.whisper_compute_type,
             download_root=str(storage.models),
         )
         return self._model
+
+    def engine_descriptor(self) -> dict[str, Any]:
+        """Everything needed to reproduce, or to distrust, a transcript."""
+        repository, revision = self.model_pin()
+        return {
+            "name": "faster-whisper",
+            "model": self.settings.whisper_model,
+            "model_repository": repository,
+            "model_revision": revision,
+            "version": _package_version("faster-whisper"),
+            "runtime": "ctranslate2",
+            "runtime_version": _package_version("ctranslate2"),
+            "device_class": self.settings.whisper_device.upper(),
+            "compute_type": self.settings.whisper_compute_type,
+        }
 
     def transcribe_job(
         self,
@@ -59,6 +93,7 @@ class FasterWhisperEngine:
         # evidence. A mismatch quarantines the object and fails the job.
         media_path = storage.verify_object(source["content_sha256"])
 
+        engine = self.engine_descriptor()
         model = self._load_model()
         segments_iter, info = model.transcribe(
             str(media_path),
@@ -73,6 +108,17 @@ class FasterWhisperEngine:
         word_count = 0
         duration_ms = int(source["duration_ms"])
         last_progress = 10
+
+        segment_provenance = {
+            "job_id": job["job_id"],
+            "engine": engine["name"],
+            "model": engine["model"],
+            "model_repository": engine["model_repository"],
+            "model_revision": engine["model_revision"],
+            "engine_version": engine["version"],
+            "runtime_version": engine["runtime_version"],
+            "device_class": engine["device_class"],
+        }
 
         for ordinal, segment in enumerate(segments_iter):
             if ordinal % 25 == 0 and repo.is_cancelled(job["job_id"]):
@@ -102,13 +148,7 @@ class FasterWhisperEngine:
                     "review_status": "UNREVIEWED",
                     "revision": 1,
                     "words": None,
-                    "provenance": {
-                        "job_id": job["job_id"],
-                        "engine": "faster-whisper",
-                        "model": self.settings.whisper_model,
-                        "engine_version": package_version("faster-whisper"),
-                        "device_class": self.settings.whisper_device.upper(),
-                    },
+                    "provenance": dict(segment_provenance),
                     "data_trust_class": "UNTRUSTED_DERIVED",
                     "instruction_authority": "NONE",
                 }
@@ -138,14 +178,7 @@ class FasterWhisperEngine:
             "duration_ms": duration_ms,
             "alignment": "NONE",
             "diarization": "NONE",
-            "engine": {
-                "name": "faster-whisper",
-                "model": self.settings.whisper_model,
-                "version": package_version("faster-whisper"),
-                "runtime": "ctranslate2",
-                "device_class": self.settings.whisper_device.upper(),
-                "compute_type": self.settings.whisper_compute_type,
-            },
+            "engine": engine,
             "data_trust_class": "UNTRUSTED_DERIVED",
             "instruction_authority": "NONE",
         }
