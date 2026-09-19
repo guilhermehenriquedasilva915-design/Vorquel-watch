@@ -54,6 +54,26 @@ def purge_legacy_secret(path: Path) -> bool:
     return True
 
 
+def _safe_supabase_error(exc: Exception) -> dict[str, str]:
+    """Return actionable Supabase diagnostics without echoing sensitive data."""
+    code = str(getattr(exc, "code", "") or "")
+    message = str(getattr(exc, "message", "") or "").lower()
+
+    if "invalid api key" in message or "invalid jwt" in message or "jwt" in message:
+        category = "credential_invalid_or_wrong_project"
+    elif "permission denied" in message or code == "42501":
+        category = "credential_lacks_required_privileges"
+    elif "schema cache" in message or "does not exist" in message or code == "42P01":
+        category = "database_schema_mismatch"
+    else:
+        category = "api_error"
+
+    result = {"category": category}
+    if code:
+        result["code"] = code[:64]
+    return result
+
+
 def cmd_configure(args: argparse.Namespace) -> int:
     url = (args.url or input("Supabase project URL: ")).strip()
     if not url.startswith("https://"):
@@ -68,7 +88,10 @@ def cmd_configure(args: argparse.Namespace) -> int:
         )
         return 2
 
-    secret = getpass.getpass("Supabase secret/service key (input hidden): ").strip()
+    secret = getpass.getpass(
+        "Supabase API secret key for THIS project "
+        "(sb_secret_... or legacy service_role; NOT database password/anon/publishable): "
+    ).strip()
     if not secret:
         print("Empty secret.", file=sys.stderr)
         return 2
@@ -198,6 +221,7 @@ def cmd_doctor(_: argparse.Namespace) -> int:
             }
     except Exception as exc:
         checks["supabase"] = f"failed:{type(exc).__name__}"
+        checks["supabase_error"] = _safe_supabase_error(exc)
         checks["database_schema"] = "not_checked"
         checks["worker"] = "not_checked"
 
