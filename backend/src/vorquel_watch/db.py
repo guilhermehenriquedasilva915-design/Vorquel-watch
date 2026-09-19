@@ -70,6 +70,54 @@ class WatchRepository:
     def healthcheck(self) -> None:
         self.client.table("sources").select("source_id").limit(1).execute()
 
+    def schema_healthcheck(self) -> dict[str, str]:
+        """Check the V1 tables/columns used by the local runtime.
+
+        This intentionally does not query Supabase management metadata: doctor
+        runs with the runtime credential and proves the application-facing
+        schema instead.
+        """
+        checks = {
+            "sources": ("sources", "source_id,latest_transcript_id"),
+            "jobs": (
+                "processing_jobs",
+                "job_id,resume_capable,worker_id,lease_expires_at",
+            ),
+            "runs": ("processing_runs", "run_id,checkpoint,status"),
+            "transcripts": ("transcripts", "transcript_id,alignment,diarization"),
+            "segments": (
+                "transcript_segments",
+                "segment_id,raw_text,effective_text,provenance",
+            ),
+            "reviews": ("reviews", "review_id,target_type,action"),
+            "screen": (
+                "screen_observations",
+                "observation_id,source_id,start_ms,end_ms",
+            ),
+        }
+        result: dict[str, str] = {}
+        for label, (table, columns) in checks.items():
+            self.client.table(table).select(columns).limit(1).execute()
+            result[label] = "ok"
+        return result
+
+    def worker_status(self) -> dict[str, Any]:
+        rows = (
+            self.client.table("processing_jobs")
+            .select("job_id,status,worker_id,lease_expires_at")
+            .eq("status", "RUNNING")
+            .limit(20)
+            .execute()
+            .data
+            or []
+        )
+        owned = [row for row in rows if row.get("worker_id")]
+        return {
+            "running_jobs": len(rows),
+            "leased_jobs": len(owned),
+            "state": "active" if owned else "not_observed",
+        }
+
     def find_source_by_hash(self, content_sha256: str) -> dict[str, Any] | None:
         result = (
             self.client.table("sources")
