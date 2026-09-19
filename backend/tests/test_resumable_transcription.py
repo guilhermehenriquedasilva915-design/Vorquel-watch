@@ -171,10 +171,12 @@ class ResumeTests(unittest.TestCase):
             "language_hint": None,
         }
         with (
-            mock.patch.object(engine, "_load_model", return_value=model),
-            mock.patch.object(
-                engine,
-                "engine_descriptor",
+            mock.patch(
+                "vorquel_watch.transcription.FasterWhisperEngine._load_model",
+                return_value=model,
+            ),
+            mock.patch(
+                "vorquel_watch.transcription.FasterWhisperEngine.engine_descriptor",
                 return_value={
                     "name": "faster-whisper",
                     "model": "small",
