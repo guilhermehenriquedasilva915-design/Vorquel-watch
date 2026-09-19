@@ -215,6 +215,51 @@ class KnowledgeWriter:
             limit=max(1, min(int(limit), 100)),
         )
 
+    def withdraw(self, knowledge_id: str, *, reason: str) -> dict[str, Any]:
+        knowledge_id = validate_id(knowledge_id, "knw_")
+        clean_reason = _bounded_text(reason, field="reason", maximum=4000)
+        return self.repo.withdraw_knowledge_item(
+            knowledge_id=knowledge_id,
+            event_id=new_id("kev_"),
+            reason=clean_reason,
+        )
+
+    def supersede(
+        self,
+        knowledge_id: str,
+        replacement_knowledge_id: str,
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        knowledge_id = validate_id(knowledge_id, "knw_")
+        replacement_knowledge_id = validate_id(replacement_knowledge_id, "knw_")
+        if knowledge_id == replacement_knowledge_id:
+            raise ValueError("knowledge item cannot supersede itself")
+        clean_reason = _bounded_text(reason, field="reason", maximum=4000)
+        return self.repo.supersede_knowledge_item(
+            knowledge_id=knowledge_id,
+            replacement_knowledge_id=replacement_knowledge_id,
+            event_id=new_id("kev_"),
+            reason=clean_reason,
+        )
+
+    def synthesize(
+        self,
+        query: str,
+        *,
+        domain: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        clean_query = _bounded_text(query, field="query", maximum=500)
+        clean_domain = None
+        if domain is not None:
+            clean_domain = _bounded_text(domain, field="domain", maximum=120)
+        return self.repo.synthesize_knowledge_context(
+            query=clean_query,
+            domain=clean_domain,
+            limit=max(1, min(int(limit), 12)),
+        )
+
     def search(
         self,
         query: str,
