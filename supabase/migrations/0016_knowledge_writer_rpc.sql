@@ -213,9 +213,9 @@ begin
     p_review_id, p_candidate_id, 'APPROVE', 'HUMAN', p_note
   );
 
-  update vorquel_knowledge.knowledge_candidates
+  update vorquel_knowledge.knowledge_candidates as c
   set status = 'APPROVED'
-  where candidate_id = p_candidate_id;
+  where c.candidate_id = p_candidate_id;
 
   insert into vorquel_knowledge.knowledge_items (
     knowledge_id, candidate_id, source_id, knowledge_type, domain,
@@ -297,9 +297,9 @@ begin
     p_review_id, p_candidate_id, 'REJECT', 'HUMAN', p_note
   );
 
-  update vorquel_knowledge.knowledge_candidates
+  update vorquel_knowledge.knowledge_candidates as c
   set status = 'REJECTED'
-  where knowledge_candidates.candidate_id = p_candidate_id;
+  where c.candidate_id = p_candidate_id;
 
   return query
   select c.candidate_id, c.status
