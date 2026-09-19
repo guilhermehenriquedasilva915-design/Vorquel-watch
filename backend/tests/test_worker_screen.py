@@ -12,7 +12,7 @@ from unittest import mock
 from vorquel_watch.local_storage import IntegrityError
 from vorquel_watch.ocr import OcrUnavailable
 from vorquel_watch.screen_pipeline import ScreenCancelled
-from vorquel_watch.transcription import JobCancelled
+from vorquel_watch.transcription import LeaseLost
 from vorquel_watch.worker import _run_screen_pass
 
 
@@ -126,7 +126,7 @@ class ScreenPassTests(unittest.TestCase):
             "vorquel_watch.screen_pipeline.build_screen_observations",
             side_effect=ScreenCancelled(),
         ):
-            with self.assertRaises(JobCancelled):
+            with self.assertRaises(LeaseLost):
                 self._run()
 
         self.repo.insert_screen_observations.assert_not_called()
