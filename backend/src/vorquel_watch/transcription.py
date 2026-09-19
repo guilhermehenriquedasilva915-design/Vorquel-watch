@@ -53,9 +53,11 @@ class FasterWhisperEngine:
             raise ValueError("source is not ready")
 
         storage = LocalStorage(self.settings.data_dir)
-        media_path = storage.object_path(source["content_sha256"])
-        if not media_path.is_file():
-            raise RuntimeError("local media object is missing")
+        # SEC-04: re-hash before processing. A content-addressed hit proves only
+        # that a file sits at that name; an object that changed on disk after
+        # ingest must never be transcribed as though it were the original
+        # evidence. A mismatch quarantines the object and fails the job.
+        media_path = storage.verify_object(source["content_sha256"])
 
         model = self._load_model()
         segments_iter, info = model.transcribe(
