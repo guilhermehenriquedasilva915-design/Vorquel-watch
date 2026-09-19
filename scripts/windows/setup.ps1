@@ -1,5 +1,5 @@
 param(
-    [string]$SupabaseUrl = "https://klirypiamkkwwdhvesar.supabase.co"
+    [string]$SupabaseUrl = "https://xnygwzuckijaxzlszfpn.supabase.co"
 )
 
 $ErrorActionPreference = "Stop"
