@@ -50,6 +50,34 @@ HOSTILE_IDS = [
 ]
 
 
+class ConfigHashTests(unittest.TestCase):
+    def test_screen_settings_change_analysis_identity(self) -> None:
+        base = _settings()
+        changed = Settings(
+            data_dir=base.data_dir,
+            supabase_url=base.supabase_url,
+            supabase_secret_key=base.supabase_secret_key,
+            screen_interval_ms=1400,
+        )
+
+        base_service = WatchService(settings=base, repo=RecordingRepo())
+        changed_service = WatchService(settings=changed, repo=RecordingRepo())
+
+        self.assertNotEqual(
+            base_service._config_hash(mode="FAST", language_hint="pt"),
+            changed_service._config_hash(mode="FAST", language_hint="pt"),
+        )
+
+    def test_same_screen_settings_keep_analysis_identity_stable(self) -> None:
+        first = WatchService(settings=_settings(), repo=RecordingRepo())
+        second = WatchService(settings=_settings(), repo=RecordingRepo())
+
+        self.assertEqual(
+            first._config_hash(mode="FAST", language_hint="pt"),
+            second._config_hash(mode="FAST", language_hint="pt"),
+        )
+
+
 class IdentifierRejectionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repo = RecordingRepo()
