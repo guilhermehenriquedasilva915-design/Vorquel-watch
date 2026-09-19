@@ -225,6 +225,48 @@ def _brain_writer() -> KnowledgeWriter:
     return KnowledgeWriter(WatchRepository(settings))
 
 
+
+def cmd_brain_propose(args: argparse.Namespace) -> int:
+    provenance = []
+    if any(
+        value is not None
+        for value in (
+            args.start_ms,
+            args.end_ms,
+            args.transcript_id,
+            args.segment_id,
+            args.screen_observation_id,
+        )
+    ):
+        from vorquel_watch.knowledge import KnowledgeProvenance
+
+        provenance.append(
+            KnowledgeProvenance(
+                start_ms=args.start_ms,
+                end_ms=args.end_ms,
+                transcript_id=args.transcript_id,
+                segment_id=args.segment_id,
+                screen_observation_id=args.screen_observation_id,
+            )
+        )
+
+    try:
+        item = _brain_writer().propose(
+            source_id=args.source_id,
+            knowledge_type=args.knowledge_type,
+            domain=args.domain,
+            title=args.title,
+            summary=args.summary,
+            epistemic_status=args.epistemic_status,
+            provenance=provenance,
+        )
+    except (TypeError, ValueError) as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+
+    print(json.dumps({"candidate": item}, ensure_ascii=False, indent=2))
+    return 0
+
 def cmd_brain_list(args: argparse.Namespace) -> int:
     try:
         items = _brain_writer().list_candidates(
@@ -427,6 +469,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the local Obsidian vault.",
     )
     export_obsidian.set_defaults(func=cmd_brain_export_obsidian)
+
+    propose = brain_sub.add_parser(
+        "propose",
+        help="Create one PENDING knowledge candidate for explicit human review.",
+    )
+    propose.add_argument("--source-id", required=True)
+    propose.add_argument("--knowledge-type", required=True)
+    propose.add_argument("--domain", required=True)
+    propose.add_argument("--title", required=True)
+    propose.add_argument("--summary", required=True)
+    propose.add_argument("--epistemic-status", required=True)
+    propose.add_argument("--start-ms", type=int)
+    propose.add_argument("--end-ms", type=int)
+    propose.add_argument("--transcript-id")
+    propose.add_argument("--segment-id")
+    propose.add_argument("--screen-observation-id")
+    propose.set_defaults(func=cmd_brain_propose)
 
     list_candidates = brain_sub.add_parser(
         "list",
