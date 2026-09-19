@@ -34,12 +34,21 @@ def _human_provenance_range(row: dict[str, Any]) -> str:
     return f"{start}–{end}"
 
 
+def _hub_name(prefix: str, value: object) -> str:
+    text = str(value or "sem-categoria").strip()
+    return f"{prefix} - {text}"
+
+
 def render_knowledge_markdown(item: dict[str, Any]) -> str:
     provenance = item.get("provenance") or []
     title = str(item.get("title") or item.get("knowledge_id") or "Conhecimento")
     summary = str(item.get("summary") or "").strip()
     epistemic_status = str(item.get("epistemic_status") or "DESCONHECIDO")
     source_id = str(item.get("source_id") or "")
+    domain = str(item.get("domain") or "sem-categoria")
+    knowledge_type = str(item.get("knowledge_type") or "UNKNOWN")
+    domain_hub = _hub_name("Domínio", domain)
+    type_hub = _hub_name("Tipo", knowledge_type)
 
     lines = [
         "---",
@@ -53,6 +62,7 @@ def render_knowledge_markdown(item: dict[str, Any]) -> str:
         f"instruction_authority: {_yaml_scalar(item.get('instruction_authority'))}",
         f"approved_at: {_yaml_scalar(item.get('approved_at'))}",
         f"aliases: [{_yaml_scalar(title)}]",
+        f"tags: [knowledge, domain/{domain}, type/{knowledge_type.lower()}]",
         'generated_by: "vorquel-watch"',
         "---",
         "",
@@ -73,6 +83,11 @@ def render_knowledge_markdown(item: dict[str, Any]) -> str:
             "automaticamente como metodologia canônica, evidência independente ou verdade de "
             "mercado sem validação adicional."
         ),
+        "",
+        "## Relacionado a",
+        "",
+        f"- [[{domain_hub}]]",
+        f"- [[{type_hub}]]",
         "",
         "## Fonte e rastreabilidade",
         "",
@@ -127,6 +142,26 @@ def render_knowledge_markdown(item: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_hub_markdown(title: str, items: list[dict[str, Any]]) -> str:
+    lines = [
+        "---",
+        'generated_by: "vorquel-watch"',
+        "tags: [brain-hub]",
+        "---",
+        "",
+        f"# {title}",
+        "",
+        "## Conhecimentos relacionados",
+        "",
+    ]
+    for item in sorted(items, key=lambda row: str(row.get("title") or "").lower()):
+        knowledge_id = str(item.get("knowledge_id") or "")
+        item_title = str(item.get("title") or knowledge_id)
+        lines.append(f"- [[{knowledge_id}|{item_title}]]")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def export_to_obsidian(repo: Any, vault_path: str | Path) -> dict[str, Any]:
     vault = Path(vault_path).expanduser().resolve()
     if not vault.exists() or not vault.is_dir():
@@ -139,6 +174,7 @@ def export_to_obsidian(repo: Any, vault_path: str | Path) -> dict[str, Any]:
 
     items = repo.export_approved_knowledge(limit=1000, offset=0)
     written: list[str] = []
+    hub_groups: dict[str, list[dict[str, Any]]] = {}
     for item in items:
         knowledge_id = str(item.get("knowledge_id") or "")
         if not knowledge_id.startswith("knw_"):
@@ -152,10 +188,33 @@ def export_to_obsidian(repo: Any, vault_path: str | Path) -> dict[str, Any]:
             newline="\n",
         )
         written.append(str(target))
+        domain_hub = _hub_name("Domínio", item.get("domain"))
+        type_hub = _hub_name("Tipo", item.get("knowledge_type"))
+        hub_groups.setdefault(domain_hub, []).append(item)
+        hub_groups.setdefault(type_hub, []).append(item)
+
+    hubs_dir = (generated / "_hubs").resolve()
+    if generated not in hubs_dir.parents:
+        raise ValueError("hub directory escaped generated directory")
+    hubs_dir.mkdir(parents=True, exist_ok=True)
+
+    hub_files: list[str] = []
+    for hub_title, hub_items in hub_groups.items():
+        safe_name = hub_title.replace("/", "-").replace("\\", "-").replace(":", " -")
+        hub_target = (hubs_dir / f"{safe_name}.md").resolve()
+        if hubs_dir not in hub_target.parents:
+            raise ValueError("hub target escaped generated directory")
+        hub_target.write_text(
+            render_hub_markdown(hub_title, hub_items),
+            encoding="utf-8",
+            newline="\n",
+        )
+        hub_files.append(str(hub_target))
 
     return {
         "vault": str(vault),
         "generated_dir": str(generated),
         "exported_count": len(written),
         "files": written,
+        "hub_files": hub_files,
     }
