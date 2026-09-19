@@ -103,6 +103,13 @@ class WatchService:
                     "raw_media_cloud_upload": False,
                     "resume_running_jobs": False,
                 },
+                "knowledge": {
+                    "extension": "V1.1",
+                    "candidate_review_required": True,
+                    "human_approval_required": True,
+                    "retrieval": "POSTGRES_FTS",
+                    "instruction_authority": "NONE",
+                },
             },
             contains_untrusted_content=False,
         )
