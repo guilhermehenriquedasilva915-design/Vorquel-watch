@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from uuid import uuid4
 
@@ -36,6 +37,19 @@ def new_id(prefix: str) -> str:
     if prefix not in _ALLOWED_PREFIXES:
         raise ValueError("unsupported identifier prefix")
     return f"{prefix}{uuid4().hex}"
+
+
+def stable_id(prefix: str, *parts: object) -> str:
+    """Deterministic opaque ID for idempotent persisted work.
+
+    Only hashes of internal opaque identifiers/counters are emitted. This is
+    used for retry-safe transcript segments; it does not encode host paths or
+    media text in the identifier.
+    """
+    if prefix not in _ALLOWED_PREFIXES:
+        raise ValueError("unsupported identifier prefix")
+    material = "\x1f".join(str(part) for part in parts).encode("utf-8")
+    return f"{prefix}{hashlib.sha256(material).hexdigest()[:32]}"
 
 
 def validate_id(value: object, prefix: str) -> str:
