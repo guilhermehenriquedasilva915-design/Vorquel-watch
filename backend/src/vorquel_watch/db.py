@@ -34,6 +34,25 @@ def _clamp_limit(value: int, maximum: int = 200) -> int:
     return max(1, min(int(value), maximum))
 
 
+# SEC-07. The explicit projection for segment data leaving the process toward
+# an MCP client. raw_text is deliberately absent: it is the pre-review original
+# and is not part of the MCP surface, callers receive effective_text. words is
+# appended only when the caller asks for it. Listing columns rather than
+# selecting * means a future internal column is not exposed by accident.
+_SEGMENT_MCP_COLUMNS = (
+    "segment_id,transcript_id,source_id,ordinal,start_ms,end_ms,"
+    "effective_text,text_origin,review_status,revision,speaker_id,"
+    "confidence,data_trust_class,instruction_authority,provenance"
+)
+
+# Job rows are returned to MCP callers by start_analysis and get_job.
+_JOB_MCP_COLUMNS = (
+    "job_id,source_id,mode,status,stage,progress_permille,pipeline_version,"
+    "language_hint,resume_capable,error_code,error_message,created_at,"
+    "started_at,completed_at"
+)
+
+
 class WatchRepository:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -140,7 +159,7 @@ class WatchRepository:
 
         existing = (
             self.client.table("processing_jobs")
-            .select("*")
+            .select(_JOB_MCP_COLUMNS)
             .eq("source_id", source_id)
             .eq("mode", mode)
             .eq("config_hash", config_hash)
@@ -171,7 +190,7 @@ class WatchRepository:
         except Exception:
             existing = (
                 self.client.table("processing_jobs")
-                .select("*")
+                .select(_JOB_MCP_COLUMNS)
                 .eq("source_id", source_id)
                 .eq("mode", mode)
                 .eq("config_hash", config_hash)
@@ -322,9 +341,15 @@ class WatchRepository:
         return bool(result.data)
 
     def get_transcript_meta(self, transcript_id: str) -> dict[str, Any] | None:
+        """SEC-07: explicit projection. job_id is included so the caller can
+        check that the producing job actually succeeded (INT-04)."""
         result = (
             self.client.table("transcripts")
-            .select("*")
+            .select(
+                "transcript_id,source_id,job_id,language,text_source,"
+                "segment_count,word_count,duration_ms,alignment,diarization,"
+                "engine,data_trust_class,instruction_authority,created_at"
+            )
             .eq("transcript_id", transcript_id)
             .limit(1)
             .execute()
@@ -405,7 +430,19 @@ class WatchRepository:
         context_after: int = 2,
         include_words: bool = False,
     ) -> dict[str, Any] | None:
-        columns = "*"
+        """Read one segment plus bounded neighbouring context.
+
+        SEC-07. The projection is explicit in both queries. The previous
+        select("*") leaked raw_text whenever include_words was true, because
+        the pop that removed it only ran on the false branch - and it would
+        have leaked any future internal column automatically. raw_text is the
+        pre-review original and is never part of the MCP surface; callers get
+        effective_text. Adding a column here is now a deliberate act.
+        """
+        columns = _SEGMENT_MCP_COLUMNS
+        if include_words:
+            columns += ",words"
+
         result = (
             self.client.table("transcript_segments")
             .select(columns)
@@ -415,24 +452,24 @@ class WatchRepository:
         )
         if not result.data:
             return None
+
         target = result.data[0]
         before = max(0, min(int(context_before), 10))
         after = max(0, min(int(context_after), 10))
         low = max(0, int(target["ordinal"]) - before)
         high = int(target["ordinal"]) + after
-        query = (
+
+        rows = (
             self.client.table("transcript_segments")
-            .select("*")
+            .select(columns)
             .eq("transcript_id", target["transcript_id"])
             .gte("ordinal", low)
             .lte("ordinal", high)
             .order("ordinal")
+            .execute()
+            .data
+            or []
         )
-        rows = query.execute().data or []
-        if not include_words:
-            for row in rows:
-                row.pop("words", None)
-                row.pop("raw_text", None)
         return {"target_segment_id": segment_id, "segments": rows}
 
     def list_speakers(self, source_id: str) -> list[dict[str, Any]]:
@@ -461,7 +498,10 @@ class WatchRepository:
         offset = _decode_cursor(cursor)
         query = (
             self.client.table("speaker_turns")
-            .select("*")
+            .select(
+                "turn_id,speaker_id,source_id,job_id,start_ms,end_ms,"
+                "confidence,created_at"
+            )
             .eq("speaker_id", speaker_id)
             .order("start_ms")
         )
