@@ -11,8 +11,11 @@ permissions:
   pull-requests: read
 
 jobs:
+  # Windows is the V1 target platform. The reviewed lock includes the screen
+  # runtime, whose dependency graph contains Windows-only wheels. Exercising
+  # that lock on Ubuntu is not a meaningful reproducibility check.
   python-and-policy:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -24,11 +27,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Install the reviewed, hash-pinned dependency set rather than letting
-      # pip resolve freely, then the package itself without re-resolving.
-      # The media runtime comes with the lock on purpose: the Source Guard tests
-      # (duration regression, container allowlist, host-path leakage) need av,
-      # and without it unittest silently skips the whole suite.
       - name: Install locked dependencies
         run: |
           python -m pip install --require-hashes -r backend/requirements.lock
@@ -40,39 +38,18 @@ jobs:
       - name: Compile
         run: python -m compileall -q backend/src backend/tests scripts
 
-      - name: Media runtime must be importable
-        run: python -c "import av, faster_whisper"
+      - name: Full runtime must be importable
+        run: python -c "import av, faster_whisper, rapidocr, yt_dlp, vorquel_watch.mcp_server"
 
-      # The Source Guard suite self-skips when av is missing, so a dropped media
-      # runtime would silently retire the duration and container-allowlist
-      # regression tests instead of breaking the build. Only that class of skip
-      # is fatal: the DPAPI credential tests skip legitimately on Linux, and a
-      # blanket skips-are-failures rule would break CI for the wrong reason.
-      - name: Unit tests (media skips are failures)
-        run: |
-          python - <<'PY'
-          import sys, unittest
-          suite = unittest.defaultTestLoader.discover(
-              "backend/tests", pattern="test_*.py"
-          )
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          blocked = [
-              (test, reason)
-              for test, reason in result.skipped
-              if "media runtime" in reason
-          ]
-          for test, reason in blocked:
-              print(f"SKIPPED {test}: {reason}", file=sys.stderr)
-          if blocked:
-              sys.exit("media-dependent tests must not skip in CI")
-          if not result.wasSuccessful():
-              sys.exit("tests failed")
-          PY
+      - name: Unit tests
+        run: python scripts/ci/run_tests.py
 
       - name: Repository security policy
         run: python scripts/security/check_repo.py
 
-
+  # Keep one Linux smoke so Windows-first does not quietly turn into
+  # Windows-only at the core transcription/MCP layer. This job intentionally
+  # does not install the Windows-generated all-extras lock.
   transcription-runtime:
     runs-on: ubuntu-latest
     steps:
@@ -112,7 +89,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   dependencies:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -124,44 +101,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Both tools are pinned. An unpinned security tool is its own
-      # supply-chain gap.
       - name: Install audit tooling
         run: python -m pip install "pip-tools==7.6.1" "pip-audit==2.10.1"
 
-      # A lock that has drifted from pyproject silently stops protecting
-      # anything, because the set that gets installed is no longer the set that
-      # was reviewed and audited.
-      - name: Lock is in sync with pyproject
+      - name: Lock is in sync with every V1 runtime extra
         run: |
-          python -m piptools compile --generate-hashes --strip-extras \
-            --extra transcribe --quiet \
-            --output-file /tmp/expected.lock backend/pyproject.toml
-          grep -v '^[[:space:]]*#' backend/requirements.lock > /tmp/current.clean
-          grep -v '^[[:space:]]*#' /tmp/expected.lock > /tmp/expected.clean
-          if ! diff -u /tmp/current.clean /tmp/expected.clean; then
-            echo "backend/requirements.lock is out of date. Regenerate it:"
-            echo "  pip-compile --generate-hashes --strip-extras --extra transcribe \\"
-            echo "    --output-file backend/requirements.lock backend/pyproject.toml"
-            exit 1
-          fi
+          python -m piptools compile --generate-hashes --strip-extras --extra screen --extra transcribe --extra youtube --quiet --output-file expected.lock backend/pyproject.toml
+          python scripts/ci/check_lock.py backend/requirements.lock expected.lock
 
-      # pip check is a compatibility check, not a vulnerability scanner. This is
-      # the vulnerability scanner.
       - name: Vulnerability audit of the locked set
-        run: |
-          python -m pip_audit --requirement backend/requirements.lock \
-            --progress-spinner off
+        run: python -m pip_audit --requirement backend/requirements.lock --progress-spinner off
 
       - name: Generate SBOM
         run: |
-          python -m pip_audit --requirement backend/requirements.lock \
-            --format=cyclonedx-json --output sbom.cyclonedx.json \
-            --progress-spinner off
-          python - <<'PY'
-          import json
-          with open("sbom.cyclonedx.json", encoding="utf-8") as handle:
-              sbom = json.load(handle)
-          print(sbom["bomFormat"], sbom["specVersion"],
-                len(sbom["components"]), "components")
-          PY
+          python -m pip_audit --requirement backend/requirements.lock --format=cyclonedx-json --output sbom.cyclonedx.json --progress-spinner off
+          python scripts/ci/check_sbom.py sbom.cyclonedx.json
