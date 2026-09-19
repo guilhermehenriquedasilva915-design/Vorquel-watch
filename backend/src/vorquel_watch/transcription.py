@@ -14,6 +14,11 @@ class JobCancelled(Exception):
     pass
 
 
+class LeaseLost(Exception):
+    """This worker no longer owns the job; do not change terminal state."""
+    pass
+
+
 def _package_version(name: str) -> str:
     try:
         return package_version(name)
@@ -132,7 +137,7 @@ class FasterWhisperEngine:
                 # worker - in every case, stop.
                 if worker_id is not None:
                     if not repo.heartbeat(job["job_id"], worker_id, lease_seconds):
-                        raise JobCancelled()
+                        raise LeaseLost()
                 elif repo.is_cancelled(job["job_id"]):
                     raise JobCancelled()
 
