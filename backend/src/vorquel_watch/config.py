@@ -135,6 +135,9 @@ class Settings:
     max_transcript_segments: int = 50000
     max_transcript_text_bytes: int = 64 * 1024 * 1024
     max_export_bytes: int = 128 * 1024 * 1024
+    transcription_chunk_ms: int = 10 * 60 * 1000
+    transcription_overlap_ms: int = 2000
+    transcription_chunk_retries: int = 2
     whisper_model: str = "small"
     whisper_model_revision: str | None = None
     whisper_device: str = "cpu"
@@ -197,6 +200,15 @@ class Settings:
                     "VORQUEL_WATCH_MAX_EXPORT_BYTES",
                     str(128 * 1024 * 1024),
                 )
+            ),
+            transcription_chunk_ms=int(
+                os.environ.get("VORQUEL_WATCH_TRANSCRIPTION_CHUNK_MS", str(10 * 60 * 1000))
+            ),
+            transcription_overlap_ms=int(
+                os.environ.get("VORQUEL_WATCH_TRANSCRIPTION_OVERLAP_MS", "2000")
+            ),
+            transcription_chunk_retries=int(
+                os.environ.get("VORQUEL_WATCH_TRANSCRIPTION_CHUNK_RETRIES", "2")
             ),
             whisper_model=os.environ.get(
                 "VORQUEL_WATCH_WHISPER_MODEL", "small"
