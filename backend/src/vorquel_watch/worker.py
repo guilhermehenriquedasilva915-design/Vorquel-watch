@@ -8,11 +8,8 @@ from uuid import uuid4
 from vorquel_watch.config import Settings
 from vorquel_watch.db import DEFAULT_LEASE_SECONDS, WatchRepository
 from vorquel_watch.logging_utils import configure_logging, log_event
-from vorquel_watch.transcription import (
-    FasterWhisperEngine,
-    JobCancelled,
-    persist_transcription,
-)
+from vorquel_watch.resumable import transcribe_resumable
+from vorquel_watch.transcription import FasterWhisperEngine, JobCancelled, LeaseLost
 
 
 LOG = logging.getLogger("vorquel_watch.worker")
@@ -44,26 +41,18 @@ def process_one(
     job_id = claimed["job_id"]
     source_id = claimed["source_id"]
     try:
-        transcript, rows = engine.transcribe_job(
-            repo, claimed, worker_id=worker_id, lease_seconds=lease_seconds
+        transcript = transcribe_resumable(
+            repo,
+            engine,
+            claimed,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
         )
 
-        # Confirm the lease still belongs to us before writing anything. A
-        # cancellation or a reclaim during transcription means this result is no
-        # longer ours to record.
         if not repo.heartbeat(job_id, worker_id, lease_seconds):
-            log_event(
-                LOG,
-                logging.INFO,
-                "lease_lost",
-                job_id=job_id,
-                source_id=source_id,
-                stage="PRE_PERSIST",
-            )
-            return True
+            raise LeaseLost()
 
         repo.update_job(job_id, {"stage": "INDEXING", "progress_permille": 930})
-        persist_transcription(repo, transcript, rows)
         _run_screen_pass(repo, engine.settings, claimed, worker_id, lease_seconds)
         # Atomic: provenance revalidated, source pointers and terminal status
         # written in one transaction. Raises if the job stopped being RUNNING,
@@ -76,6 +65,14 @@ def process_one(
             job_id=job_id,
             source_id=source_id,
             transcript_id=transcript["transcript_id"],
+        )
+    except LeaseLost:
+        log_event(
+            LOG,
+            logging.INFO,
+            "lease_lost",
+            job_id=job_id,
+            source_id=source_id,
         )
     except JobCancelled:
         repo.set_terminal_status(
@@ -200,7 +197,7 @@ def _run_screen_pass(
         )
     except ScreenCancelled:
         # Losing the job is not a screen failure: it must stop the whole job.
-        raise JobCancelled() from None
+        raise LeaseLost() from None
     except OcrUnavailable as exc:
         log_event(
             LOG,
