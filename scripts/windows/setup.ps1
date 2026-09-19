@@ -73,7 +73,14 @@ if (-not $SupabaseUrl) {
 }
 
 & $Python -m vorquel_watch.cli configure --url $SupabaseUrl
+if ($LASTEXITCODE -ne 0) {
+    throw "Vorquel Watch configuration failed."
+}
+
 & $Python -m vorquel_watch.cli doctor
+if ($LASTEXITCODE -ne 0) {
+    throw "Vorquel Watch doctor did not pass. Fix the reported checks before continuing."
+}
 
 $DataDir = Join-Path $env:LOCALAPPDATA "VorquelWatch"
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
