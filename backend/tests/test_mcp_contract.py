@@ -20,6 +20,12 @@ EXPECTED_TOOLS = {
     "create_export",
     "list_artifacts",
     "get_artifact",
+    # V1.1 reviewed-knowledge extension (ADR 0004).
+    "propose_knowledge_candidate",
+    "list_knowledge_candidates",
+    "approve_knowledge_candidate",
+    "reject_knowledge_candidate",
+    "search_knowledge",
 }
 
 # Arguments no tool may ever take. The surface is bounded by what does not
@@ -53,7 +59,7 @@ def _schema_of(tool) -> dict:
 
 
 class McpContractTests(unittest.IsolatedAsyncioTestCase):
-    async def test_frozen_tool_surface_is_present(self) -> None:
+    async def test_versioned_tool_surface_is_present(self) -> None:
         async with Client(mcp) as client:
             result = await client.list_tools()
             names = {tool.name for tool in result.tools}
