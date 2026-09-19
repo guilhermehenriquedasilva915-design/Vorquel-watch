@@ -16,6 +16,18 @@ dependencies = [
 transcribe = [
   "faster-whisper==1.2.1",
 ]
+# Screen pipeline. The frame timeline, sampling and change detection need
+# nothing beyond PyAV and numpy, which transcribe already brings; only OCR
+# adds a dependency. Kept as its own extra so a transcript-only install stays
+# small.
+screen = [
+  "rapidocr==3.9.2",
+]
+# YouTube ingest. Separate because it is the only component that reaches the
+# public network, and an install that never ingests a URL should not carry it.
+youtube = [
+  "yt-dlp==2026.8.19",
+]
 
 [project.scripts]
 vorquel-watch = "vorquel_watch.cli:main"
