@@ -39,7 +39,7 @@ jobs:
         run: python -m compileall -q backend/src backend/tests scripts
 
       - name: Full runtime must be importable
-        run: python -c "import av, faster_whisper, rapidocr, yt_dlp, vorquel_watch.mcp_server"
+        run: python -c "import av, faster_whisper, rapidocr, vorquel_watch.mcp_server"
 
       - name: Logging hardening tests
         continue-on-error: true
@@ -91,12 +91,6 @@ jobs:
         continue-on-error: true
         run: python backend/tests/test_mcp_contract.py
 
-      - name: URL ingest tests
-        continue-on-error: true
-        run: |
-          python backend/tests/test_ingest_url.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python backend/tests/test_youtube.py
 
       - name: Unit tests
         run: python scripts/ci/run_tests.py
@@ -163,7 +157,7 @@ jobs:
 
       - name: Lock is in sync with every V1 runtime extra
         run: |
-          python -m piptools compile --generate-hashes --strip-extras --extra screen --extra transcribe --extra youtube --quiet --output-file expected.lock backend/pyproject.toml
+          python -m piptools compile --generate-hashes --strip-extras --extra screen --extra transcribe --quiet --output-file expected.lock backend/pyproject.toml
           python scripts/ci/check_lock.py backend/requirements.lock expected.lock
 
       - name: Vulnerability audit of the locked set
