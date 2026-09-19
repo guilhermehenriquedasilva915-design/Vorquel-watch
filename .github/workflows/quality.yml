@@ -24,11 +24,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The media runtime is installed here on purpose: the Source Guard tests
+      # Install the reviewed, hash-pinned dependency set rather than letting
+      # pip resolve freely, then the package itself without re-resolving.
+      # The media runtime comes with the lock on purpose: the Source Guard tests
       # (duration regression, container allowlist, host-path leakage) need av,
       # and without it unittest silently skips the whole suite.
-      - name: Install package with media runtime
-        run: python -m pip install -e "backend[transcribe]"
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --require-hashes -r backend/requirements.lock
+          python -m pip install -e backend --no-deps
 
       - name: Dependency check
         run: python -m pip check
@@ -106,3 +110,58 @@ jobs:
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Both tools are pinned. An unpinned security tool is its own
+      # supply-chain gap.
+      - name: Install audit tooling
+        run: python -m pip install "pip-tools==7.6.1" "pip-audit==2.10.1"
+
+      # A lock that has drifted from pyproject silently stops protecting
+      # anything, because the set that gets installed is no longer the set that
+      # was reviewed and audited.
+      - name: Lock is in sync with pyproject
+        run: |
+          python -m piptools compile --generate-hashes --strip-extras \
+            --extra transcribe --quiet \
+            --output-file /tmp/expected.lock backend/pyproject.toml
+          grep -v '^[[:space:]]*#' backend/requirements.lock > /tmp/current.clean
+          grep -v '^[[:space:]]*#' /tmp/expected.lock > /tmp/expected.clean
+          if ! diff -u /tmp/current.clean /tmp/expected.clean; then
+            echo "backend/requirements.lock is out of date. Regenerate it:"
+            echo "  pip-compile --generate-hashes --strip-extras --extra transcribe \\"
+            echo "    --output-file backend/requirements.lock backend/pyproject.toml"
+            exit 1
+          fi
+
+      # pip check is a compatibility check, not a vulnerability scanner. This is
+      # the vulnerability scanner.
+      - name: Vulnerability audit of the locked set
+        run: |
+          python -m pip_audit --requirement backend/requirements.lock \
+            --progress-spinner off
+
+      - name: Generate SBOM
+        run: |
+          python -m pip_audit --requirement backend/requirements.lock \
+            --format=cyclonedx-json --output sbom.cyclonedx.json \
+            --progress-spinner off
+          python - <<'PY'
+          import json
+          with open("sbom.cyclonedx.json", encoding="utf-8") as handle:
+              sbom = json.load(handle)
+          print(sbom["bomFormat"], sbom["specVersion"],
+                len(sbom["components"]), "components")
+          PY
