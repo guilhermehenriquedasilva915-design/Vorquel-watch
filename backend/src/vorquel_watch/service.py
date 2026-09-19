@@ -46,6 +46,11 @@ class WatchService:
             "compute_type": self.settings.whisper_compute_type,
             "transcription_chunk_ms": self.settings.transcription_chunk_ms,
             "transcription_overlap_ms": self.settings.transcription_overlap_ms,
+            "screen_enabled": self.settings.screen_enabled,
+            "screen_interval_ms": self.settings.screen_interval_ms,
+            "screen_change_threshold": self.settings.screen_change_threshold,
+            "screen_max_observations": self.settings.screen_max_observations,
+            "screen_max_samples": self.settings.screen_max_samples,
             "pipeline_version": self.settings.pipeline_version,
         }
         raw = json.dumps(
