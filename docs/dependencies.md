@@ -19,7 +19,7 @@ elsewhere.
 
 ```
 pip install "pip-tools==7.6.1"
-pip-compile --generate-hashes --strip-extras --extra transcribe \
+pip-compile --generate-hashes --strip-extras --extra transcribe --extra screen \
   --output-file backend/requirements.lock backend/pyproject.toml
 ```
 
@@ -56,9 +56,9 @@ its own supply-chain gap.
 
 Measured on 2026-09-18 against `backend/requirements.lock`:
 
-- 63 packages pinned, 1268 artifact hashes
-- `pip-audit`: no known vulnerabilities
-- SBOM: CycloneDX 1.4, 62 components
+- exact package/artifact counts are produced by the current CI lock/audit run;
+- `pip-audit` is run against the hash-locked V1 runtime;
+- the SBOM is generated as CycloneDX JSON on every pull request.
 
 ## Media stack
 
