@@ -9,6 +9,7 @@ from vorquel_watch.db import WatchRepository
 from vorquel_watch.envelope import envelope, safe_error
 from vorquel_watch.exports import create_export
 from vorquel_watch.ids import validate_id
+from vorquel_watch.knowledge import KnowledgeProvenance, KnowledgeWriter
 
 
 MAX_SEARCH_SOURCE_IDS = 25
@@ -439,6 +440,131 @@ class WatchService:
             },
             contains_untrusted_content=True,
         )
+
+    # ------------------------------------------------------------- knowledge
+
+    def propose_knowledge_candidate(
+        self,
+        *,
+        source_id: str,
+        knowledge_type: str,
+        domain: str,
+        title: str,
+        summary: str,
+        epistemic_status: str,
+        provenance: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            source_id = validate_id(source_id, "src_")
+            rows: list[KnowledgeProvenance] = []
+            for entry in provenance or []:
+                if not isinstance(entry, dict):
+                    raise ValueError("each provenance entry must be an object")
+                rows.append(
+                    KnowledgeProvenance(
+                        start_ms=entry.get("start_ms"),
+                        end_ms=entry.get("end_ms"),
+                        transcript_id=entry.get("transcript_id"),
+                        segment_id=entry.get("segment_id"),
+                        screen_observation_id=entry.get("screen_observation_id"),
+                    )
+                )
+            candidate = KnowledgeWriter(self.repo).propose(
+                source_id=source_id,
+                knowledge_type=knowledge_type,
+                domain=domain,
+                title=title,
+                summary=summary,
+                epistemic_status=epistemic_status,
+                provenance=rows,
+            )
+            return envelope(
+                "propose_knowledge_candidate",
+                {"candidate": candidate},
+                contains_untrusted_content=True,
+            )
+        except ValueError as exc:
+            return safe_error(
+                "propose_knowledge_candidate", "INVALID_ARGUMENT", str(exc)
+            )
+
+    def list_knowledge_candidates(
+        self,
+        *,
+        source_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        try:
+            items = KnowledgeWriter(self.repo).list_candidates(
+                source_id=source_id,
+                status=status,
+                limit=limit,
+            )
+            return envelope(
+                "list_knowledge_candidates",
+                {"items": items},
+                contains_untrusted_content=True,
+            )
+        except (TypeError, ValueError) as exc:
+            return safe_error(
+                "list_knowledge_candidates", "INVALID_ARGUMENT", str(exc)
+            )
+
+    def approve_knowledge_candidate(
+        self,
+        candidate_id: str,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            item = KnowledgeWriter(self.repo).approve(candidate_id, note=note)
+            return envelope(
+                "approve_knowledge_candidate",
+                {"knowledge_item": item},
+                contains_untrusted_content=True,
+            )
+        except ValueError as exc:
+            return safe_error(
+                "approve_knowledge_candidate", "INVALID_ARGUMENT", str(exc)
+            )
+
+    def reject_knowledge_candidate(
+        self,
+        candidate_id: str,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            candidate = KnowledgeWriter(self.repo).reject(candidate_id, note=note)
+            return envelope(
+                "reject_knowledge_candidate",
+                {"candidate": candidate},
+                contains_untrusted_content=True,
+            )
+        except ValueError as exc:
+            return safe_error(
+                "reject_knowledge_candidate", "INVALID_ARGUMENT", str(exc)
+            )
+
+    def search_knowledge(
+        self,
+        query: str,
+        *,
+        domain: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        try:
+            items = KnowledgeWriter(self.repo).search(
+                query,
+                domain=domain,
+                limit=limit,
+            )
+            return envelope(
+                "search_knowledge",
+                {"items": items},
+                contains_untrusted_content=True,
+            )
+        except (TypeError, ValueError) as exc:
+            return safe_error("search_knowledge", "INVALID_ARGUMENT", str(exc))
 
     # ----------------------------------------------------------------- screen
 
