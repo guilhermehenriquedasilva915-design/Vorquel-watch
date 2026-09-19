@@ -91,9 +91,14 @@ Stated plainly rather than omitted:
 - The runtime authenticates as `service_role`. The least-privilege
   `watch_runtime` role exists but needs a token carrying its role claim.
 - Media isolation has no memory, CPU, filesystem or privilege limits.
-- Logging is not yet structured or systematically redacted. The local CLI
-  prints absolute paths by design; the MCP surface does not.
-- Resource limits beyond size and duration are not yet enforced.
+- Worker/application logs are structured JSON events and systematically drop
+  sensitive field classes such as secrets, tokens, cookies, URLs, filesystem
+  paths, transcript text and prompt/content fields. The local operator-facing
+  CLI may still print local paths for setup/diagnostics; MCP responses do not.
+- Application-level resource limits now cover source bytes/duration, stream
+  count, video dimensions, audio sample rate/channels, probe time/output,
+  transcript segment/text volume, screen samples/observations and export size.
+  OS-level CPU, memory, disk and process-concurrency confinement remains open.
 
 ## Reporting
 
