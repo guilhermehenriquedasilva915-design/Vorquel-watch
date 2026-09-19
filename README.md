@@ -48,7 +48,7 @@ paths.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\windows\setup.ps1
-vorquel-watch configure --url https://xnygwzuckijaxzlszfpn.supabase.co
+vorquel-watch configure --url https://klirypiamkkwwdhvesar.supabase.co
 vorquel-watch doctor
 .\scripts\windows\start-worker.ps1
 ```
