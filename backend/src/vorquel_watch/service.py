@@ -44,6 +44,8 @@ class WatchService:
             "whisper_model": self.settings.whisper_model,
             "device": self.settings.whisper_device,
             "compute_type": self.settings.whisper_compute_type,
+            "transcription_chunk_ms": self.settings.transcription_chunk_ms,
+            "transcription_overlap_ms": self.settings.transcription_overlap_ms,
             "pipeline_version": self.settings.pipeline_version,
         }
         raw = json.dumps(
