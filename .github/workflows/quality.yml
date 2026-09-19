@@ -36,10 +36,15 @@ jobs:
       - name: Compile
         run: python -m compileall -q backend/src backend/tests scripts
 
-      # A skip is a failure here. The Source Guard suite self-skips when av is
-      # missing, so a dropped media runtime would silently retire the duration
-      # and container-allowlist regression tests instead of breaking the build.
-      - name: Unit tests (skips are failures)
+      - name: Media runtime must be importable
+        run: python -c "import av, faster_whisper"
+
+      # The Source Guard suite self-skips when av is missing, so a dropped media
+      # runtime would silently retire the duration and container-allowlist
+      # regression tests instead of breaking the build. Only that class of skip
+      # is fatal: the DPAPI credential tests skip legitimately on Linux, and a
+      # blanket skips-are-failures rule would break CI for the wrong reason.
+      - name: Unit tests (media skips are failures)
         run: |
           python - <<'PY'
           import sys, unittest
@@ -47,9 +52,14 @@ jobs:
               "backend/tests", pattern="test_*.py"
           )
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          if result.skipped:
-              for test, reason in result.skipped:
-                  print(f"SKIPPED {test}: {reason}", file=sys.stderr)
+          blocked = [
+              (test, reason)
+              for test, reason in result.skipped
+              if "media runtime" in reason
+          ]
+          for test, reason in blocked:
+              print(f"SKIPPED {test}: {reason}", file=sys.stderr)
+          if blocked:
               sys.exit("media-dependent tests must not skip in CI")
           if not result.wasSuccessful():
               sys.exit("tests failed")
