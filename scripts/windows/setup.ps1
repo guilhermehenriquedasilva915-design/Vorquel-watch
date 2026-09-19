@@ -14,28 +14,33 @@ if (-not (Test-Path $Python)) {
     $BasePython = $null
     $BasePythonArgs = @()
 
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        $BasePython = "py"
-        $BasePythonArgs = @("-3.12")
-    } elseif (Get-Command python -ErrorAction SilentlyContinue) {
-        $BasePython = (Get-Command python).Source
-    } elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
-        $BasePython = (Get-Command python3).Source
+    $Candidates = @(
+        @{ Command = "py"; Args = @("-3.12") },
+        @{ Command = "python3.12"; Args = @() },
+        @{ Command = "python"; Args = @() },
+        @{ Command = "python3"; Args = @() }
+    )
+
+    foreach ($Candidate in $Candidates) {
+        $Resolved = Get-Command $Candidate.Command -ErrorAction SilentlyContinue
+        if (-not $Resolved) {
+            continue
+        }
+
+        $Command = if ($Candidate.Command -eq "py") { "py" } else { $Resolved.Source }
+        & $Command @($Candidate.Args) -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,12) else 1)" 2>$null
+
+        if ($LASTEXITCODE -eq 0) {
+            $BasePython = $Command
+            $BasePythonArgs = @($Candidate.Args)
+            break
+        }
     }
 
     if (-not $BasePython) {
         Write-Host ""
         Write-Host "Python 3.12 was not found."
         Write-Host "Install it, then rerun setup. With winget:"
-        Write-Host "  winget install -e --id Python.Python.3.12"
-        throw "Python 3.12 is required."
-    }
-
-    & $BasePython @BasePythonArgs -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,12) else 1)"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host ""
-        Write-Host "A Python command exists, but it is not Python 3.12."
-        Write-Host "Install Python 3.12, then rerun setup. With winget:"
         Write-Host "  winget install -e --id Python.Python.3.12"
         throw "Python 3.12 is required."
     }
