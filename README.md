@@ -3,9 +3,10 @@
 Private implementation repository for Vorquel Watch / Content Brain.
 
 Give it a local workshop recording and it transcribes what was said while the
-local worker can also build a timestamped screen/OCR track. The V1 Claude MCP
-surface remains the frozen 14-tool contract; dedicated screen/frame MCP tools
-and URL ingest are deferred until a separate architecture decision.
+local worker can also build a timestamped screen/OCR track. Claude Desktop uses
+the frozen V1 MCP contract plus a versioned V1.1 reviewed-knowledge extension
+for proposing, approving and retrieving persistent learning. URL ingest remains
+deferred.
 
 > "When he says this is the flow that receives the lead, the screen shows an n8n
 > workflow containing Webhook, Normalize Lead, Supabase and Follow-up."
@@ -15,19 +16,21 @@ and URL ingest are deferred until a separate architecture decision.
 | Area | State |
 |---|---|
 | Local file ingest | Implemented |
-| Transcription (FAST) | Implemented, **never run end to end** |
-| Screen tracking, change detection, dedupe | Implemented, measured on synthetic fixtures |
-| OCR | Implemented, measured on synthetic fixtures |
+| Transcription (FAST) | Implemented, validated end to end on a 35.3 s real video |
+| Screen tracking, change detection, dedupe | Implemented, validated on the same real video |
+| OCR | Implemented, validated on the same real video |
 | Frame retrieval by timestamp | Implemented and measured |
 | Combined speech + screen context | Implemented |
-| MCP surface | 14 frozen tools, contract-tested |
+| MCP surface | 14 frozen V1 tools + 5 versioned reviewed-knowledge V1.1 tools, contract-tested |
+| Reviewed knowledge store | Candidate → human review → approved item → FTS retrieval validated live with rollback |
 | Security and database integrity | Complete, verified against the live project |
 | Long-video resume | Job-level recovery only; no mid-job resume |
 | STANDARD / SPEAKERS / local UI | Not implemented |
 
-Nothing has been run against a real recording yet: registration needs the
-Supabase credential. Every claim above marked "measured" was measured on
-synthetic fixtures, which is not the same thing.
+A 35.3 second real video has been processed through ingest, transcription,
+screen sampling, OCR and persistence. This proves the pipeline executes end to
+end; it does not yet prove semantic quality, long-video robustness or workshop-
+scale throughput.
 
 ### Data flow
 
@@ -37,7 +40,9 @@ local file ─────> Source Guard ─> content-addressed local storage
                                            ├─> Faster-Whisper ─> transcript segments
                                            └─> sample / change detect / OCR ─> screen observations
                                                            │
-                           Claude Desktop ─> frozen local MCP ─> bounded transcript/provenance data
+                           Claude Desktop ─> local MCP V1/V1.1 ─> bounded transcript/provenance data
+                                                        │
+                                                        └─> reviewed knowledge candidates/items
 ```
 
 Raw media stays on the machine. Supabase holds structured metadata,
@@ -77,15 +82,20 @@ Then ask Claude about that `source_id`. The questions it can answer:
 
 | Question | Tools |
 |---|---|
-| Question | Frozen V1 tools |
+| Question | Tools |
 |---|---|
 | What was said about X? | `search_transcript` |
 | Open the relevant spoken context | `get_segment` / `get_transcript` |
 | Inspect source/job/provenance | `get_source` / `get_job` |
+| Propose something worth learning | `propose_knowledge_candidate` |
+| Review pending learning | `list_knowledge_candidates` |
+| Save only after explicit approval | `approve_knowledge_candidate` |
+| Reject a candidate | `reject_knowledge_candidate` |
+| Recall approved knowledge later | `search_knowledge` |
 
-The worker may persist screen/OCR observations, but V1 does not expose new
-screen-specific MCP tools. Screen review belongs to the local control plane/UI
-until an explicit architecture decision changes the frozen MCP contract.
+The worker persists screen/OCR observations. The V1.1 knowledge extension is
+additive and versioned by ADR 0004; media-derived text remains untrusted and
+`instruction_authority = NONE` even after human approval.
 
 See `docs/runbook/workshop-analysis.md` for the current procedure.
 
@@ -117,8 +127,8 @@ before touching `pyproject.toml`.
 
 ## Limitations
 
-- No real recording has been processed, so there are no accuracy or throughput
-  numbers for anything.
+- One short real recording has been processed, but semantic ASR/OCR quality and
+  long-video/workshop robustness are not yet validated.
 - OCR was measured on synthetic renders with clean text. Real frames carry
   compression artifacts and scaling that those fixtures do not.
 - A reclaimed job restarts from the beginning; there is no mid-job resume, so a
@@ -139,6 +149,7 @@ before touching `pyproject.toml`.
 | `docs/runbook/windows-claude-desktop.md` | Windows setup and Claude Desktop |
 | `docs/adr/0002-screen-pipeline-and-mcp-extension.md` | Historical screen/MCP proposal; partly superseded |
 | `docs/adr/0003-restore-frozen-mcp-and-defer-url-ingest.md` | Restores the frozen V1 boundary |
+| `docs/adr/0004-reviewed-knowledge-mcp-extension.md` | Additive V1.1 reviewed learning contract |
 | `docs/media-sandbox.md` | What media isolation guarantees, and what it does not |
 | `docs/dependencies.md` | Lock file, audit, SBOM, media stack CVE position |
 | `docs/threat-model/v1.md` | Threats and the status of each control |
