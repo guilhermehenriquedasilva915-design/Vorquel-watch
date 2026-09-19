@@ -1,10 +1,11 @@
 # ADR 0002 — Screen pipeline and the MCP surface extension
 
-Status: Accepted
+Status: Superseded in part by ADR 0003
 Date: 2026-09-19
 
-Supersedes the tool-count freeze in `docs/architecture/v1-baseline.md`, not its
-principles.
+The screen/OCR pipeline remains useful. The proposed five-tool MCP extension and
+URL ingest do not ship in V1 because the user explicitly reaffirmed the frozen
+MCP surface and deferred URL ingest. See ADR 0003.
 
 ## Context
 
