@@ -14,6 +14,7 @@ from vorquel_watch.db import WatchRepository
 from vorquel_watch.ingest import ingest_local_file
 from vorquel_watch.local_storage import LocalStorage
 from vorquel_watch.logging_utils import configure_logging
+from vorquel_watch.obsidian_export import export_to_obsidian
 from vorquel_watch.service import WatchService
 from vorquel_watch.worker import run_worker
 
@@ -216,6 +217,18 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0 if job.get("status") == "SUCCEEDED" else 1
 
 
+
+def cmd_brain_export_obsidian(args: argparse.Namespace) -> int:
+    settings = Settings.from_env()
+    repo = WatchRepository(settings)
+    try:
+        result = export_to_obsidian(repo, args.vault)
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
 def cmd_doctor(_: argparse.Namespace) -> int:
     data_dir = default_data_dir()
     checks: dict[str, object] = {
@@ -347,6 +360,19 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--once", action="store_true")
     worker.add_argument("--poll-seconds", type=float, default=2.0)
     worker.set_defaults(func=cmd_worker)
+
+    brain = sub.add_parser("brain")
+    brain_sub = brain.add_subparsers(dest="brain_command", required=True)
+    export_obsidian = brain_sub.add_parser(
+        "export-obsidian",
+        help="Export approved knowledge into the Obsidian vault _generated folder.",
+    )
+    export_obsidian.add_argument(
+        "--vault",
+        required=True,
+        help="Path to the local Obsidian vault.",
+    )
+    export_obsidian.set_defaults(func=cmd_brain_export_obsidian)
 
     doctor = sub.add_parser("doctor")
     doctor.set_defaults(func=cmd_doctor)
