@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
+from vorquel_watch import credentials
+
 
 def default_data_dir() -> Path:
     override = os.environ.get("VORQUEL_WATCH_DATA_DIR")
@@ -17,8 +19,16 @@ def default_data_dir() -> Path:
     return (Path.home() / ".local" / "share" / "vorquel-watch").resolve()
 
 
+SECRET_ENV_VAR = "VORQUEL_WATCH_SUPABASE_SECRET_KEY"
+
+
 def _load_config_env(data_dir: Path) -> None:
-    """Load the local control-plane env file without overriding process env."""
+    """Load non-secret local preferences without overriding process env.
+
+    SEC-03: the secret is never read from this file. It lives in the OS
+    credential store. A value left here by an older install is ignored, so a
+    stale plaintext secret cannot quietly keep working.
+    """
     path = data_dir / "config.env"
     if not path.is_file():
         return
@@ -29,9 +39,32 @@ def _load_config_env(data_dir: Path) -> None:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        if not key or key in os.environ:
+        if not key or key == SECRET_ENV_VAR or key in os.environ:
             continue
         os.environ[key] = value.strip()
+
+
+def _resolve_secret(data_dir: Path) -> str:
+    """Return the Supabase server credential.
+
+    The environment variable is honoured first so CI and tests can inject a
+    value without touching the credential store. Otherwise the secret comes
+    from DPAPI. Never falls back to a plaintext file.
+    """
+    from_env = os.environ.get(SECRET_ENV_VAR, "").strip()
+    if from_env:
+        return from_env
+
+    if not credentials.is_supported():
+        return ""
+
+    try:
+        stored = credentials.load_secret(data_dir, credentials.SUPABASE_SECRET_NAME)
+    except credentials.CredentialError:
+        # The message carries no secret material, but it is not actionable to a
+        # caller either; surfacing "not configured" is the useful outcome.
+        return ""
+    return (stored or "").strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +85,7 @@ class Settings:
         _load_config_env(data_dir)
 
         url = os.environ.get("VORQUEL_WATCH_SUPABASE_URL", "").strip()
-        secret = os.environ.get("VORQUEL_WATCH_SUPABASE_SECRET_KEY", "").strip()
+        secret = _resolve_secret(data_dir)
         if not url or not secret:
             raise RuntimeError(
                 "Vorquel Watch is not configured. Run 'vorquel-watch configure'."

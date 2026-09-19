@@ -4,47 +4,136 @@ import argparse
 import getpass
 from importlib.metadata import version as package_version
 import json
-import os
 from pathlib import Path
-import stat
 import sys
 
-from vorquel_watch.config import Settings, default_data_dir
+from vorquel_watch import credentials
+from vorquel_watch.config import SECRET_ENV_VAR, Settings, default_data_dir
 from vorquel_watch.db import WatchRepository
 from vorquel_watch.ingest import ingest_local_file
 from vorquel_watch.local_storage import LocalStorage
 from vorquel_watch.worker import run_worker
 
 
-def _write_config(url: str, secret: str) -> Path:
+CONFIG_FILE_NAME = "config.env"
+
+
+def _write_preferences(url: str) -> Path:
+    """Write non-secret local preferences.
+
+    SEC-03: the Supabase credential is deliberately absent from this file. It
+    is stored encrypted by the OS credential store.
+    """
     data_dir = default_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
-    path = data_dir / "config.env"
-    content = (
-        "# Vorquel Watch local control-plane configuration\n"
+    path = data_dir / CONFIG_FILE_NAME
+    path.write_text(
+        "# Vorquel Watch local preferences\n"
+        "# The Supabase secret is NOT stored here. See 'vorquel-watch credential'.\n"
         f"VORQUEL_WATCH_SUPABASE_URL={url.strip()}\n"
-        f"VORQUEL_WATCH_SUPABASE_SECRET_KEY={secret.strip()}\n"
         "VORQUEL_WATCH_WHISPER_MODEL=small\n"
         "VORQUEL_WATCH_WHISPER_DEVICE=cpu\n"
-        "VORQUEL_WATCH_WHISPER_COMPUTE_TYPE=int8\n"
+        "VORQUEL_WATCH_WHISPER_COMPUTE_TYPE=int8\n",
+        encoding="utf-8",
     )
-    path.write_text(content, encoding="utf-8")
-    try:
-        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
     return path
 
 
+def purge_legacy_secret(path: Path) -> bool:
+    """Strip a plaintext secret left by an older install. Returns whether one was found."""
+    if not path.is_file():
+        return False
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    kept = [line for line in lines if not line.strip().startswith(f"{SECRET_ENV_VAR}=")]
+    if len(kept) == len(lines):
+        return False
+
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    return True
+
+
 def cmd_configure(args: argparse.Namespace) -> int:
-    url = args.url or input("Supabase project URL: ").strip()
-    secret = getpass.getpass("Supabase secret/service key (input hidden): ").strip()
-    if not url.startswith("https://") or not secret:
-        print("Invalid URL or empty secret.", file=sys.stderr)
+    url = (args.url or input("Supabase project URL: ")).strip()
+    if not url.startswith("https://"):
+        print("Invalid URL.", file=sys.stderr)
         return 2
-    path = _write_config(url, secret)
-    print(f"Configuration saved locally at: {path}")
-    print("The secret was not written to the Git repository.")
+
+    if not credentials.is_supported():
+        print(
+            "OS-backed credential storage is unavailable on this platform. "
+            "Refusing to store the credential in plaintext.",
+            file=sys.stderr,
+        )
+        return 2
+
+    secret = getpass.getpass("Supabase secret/service key (input hidden): ").strip()
+    if not secret:
+        print("Empty secret.", file=sys.stderr)
+        return 2
+
+    data_dir = default_data_dir()
+    try:
+        credentials.store_secret(data_dir, credentials.SUPABASE_SECRET_NAME, secret)
+    except credentials.CredentialError as exc:
+        print(f"Could not store the credential: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        del secret
+
+    path = _write_preferences(url)
+    if purge_legacy_secret(path):
+        print("Removed a plaintext secret left by a previous install.")
+
+    print(f"Preferences saved at: {path}")
+    print("The credential was encrypted with DPAPI and is not in any file you can read.")
+    return 0
+
+
+def cmd_credential(args: argparse.Namespace) -> int:
+    data_dir = default_data_dir()
+
+    if args.action == "status":
+        present = credentials.has_secret(data_dir, credentials.SUPABASE_SECRET_NAME)
+        print(
+            json.dumps(
+                {
+                    "backend": "dpapi" if credentials.is_supported() else "unavailable",
+                    "credential_present": present,
+                },
+                indent=2,
+            )
+        )
+        return 0 if present else 1
+
+    if args.action == "remove":
+        removed = credentials.delete_secret(
+            data_dir, credentials.SUPABASE_SECRET_NAME
+        )
+        print("Credential removed." if removed else "No credential was stored.")
+        return 0
+
+    # set / rotate share the same path: store overwrites any previous value.
+    if not credentials.is_supported():
+        print(
+            "OS-backed credential storage is unavailable on this platform.",
+            file=sys.stderr,
+        )
+        return 2
+
+    secret = getpass.getpass("Supabase secret/service key (input hidden): ").strip()
+    if not secret:
+        print("Empty secret.", file=sys.stderr)
+        return 2
+    try:
+        credentials.store_secret(data_dir, credentials.SUPABASE_SECRET_NAME, secret)
+    except credentials.CredentialError as exc:
+        print(f"Could not store the credential: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        del secret
+
+    print("Credential stored.")
     return 0
 
 
@@ -61,10 +150,16 @@ def cmd_worker(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(_: argparse.Namespace) -> int:
+    data_dir = default_data_dir()
     checks: dict[str, object] = {
         "python": sys.version.split()[0],
-        "data_dir": str(default_data_dir()),
+        "data_dir": str(data_dir),
+        "credential_backend": "dpapi" if credentials.is_supported() else "unavailable",
+        "credential_present": credentials.has_secret(
+            data_dir, credentials.SUPABASE_SECRET_NAME
+        ),
     }
+
     try:
         settings = Settings.from_env()
         LocalStorage(settings.data_dir).ensure()
@@ -74,20 +169,25 @@ def cmd_doctor(_: argparse.Namespace) -> int:
     except Exception as exc:
         checks["supabase"] = f"failed:{type(exc).__name__}"
 
-    try:
-        checks["mcp"] = package_version("mcp")
-    except Exception:
-        checks["mcp"] = "missing"
+    for label, package in (
+        ("mcp", "mcp"),
+        ("supabase_python", "supabase"),
+        ("faster_whisper", "faster-whisper"),
+        ("av", "av"),
+    ):
+        try:
+            checks[label] = package_version(package)
+        except Exception:
+            checks[label] = "missing"
 
-    try:
-        checks["supabase_python"] = package_version("supabase")
-    except Exception:
-        checks["supabase_python"] = "missing"
-
-    try:
-        checks["faster_whisper"] = package_version("faster-whisper")
-    except Exception:
-        checks["faster_whisper"] = "missing"
+    legacy = data_dir / CONFIG_FILE_NAME
+    checks["legacy_plaintext_secret"] = bool(
+        legacy.is_file()
+        and any(
+            line.strip().startswith(f"{SECRET_ENV_VAR}=")
+            for line in legacy.read_text(encoding="utf-8").splitlines()
+        )
+    )
 
     print(json.dumps(checks, ensure_ascii=False, indent=2))
     return 0 if checks.get("supabase") == "ok" else 1
@@ -113,6 +213,10 @@ def build_parser() -> argparse.ArgumentParser:
     configure = sub.add_parser("configure")
     configure.add_argument("--url")
     configure.set_defaults(func=cmd_configure)
+
+    credential = sub.add_parser("credential")
+    credential.add_argument("action", choices=["set", "rotate", "remove", "status"])
+    credential.set_defaults(func=cmd_credential)
 
     ingest = sub.add_parser("ingest")
     ingest.add_argument("path")
