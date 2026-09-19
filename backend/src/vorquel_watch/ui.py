@@ -36,6 +36,7 @@ class VorquelWatchUI:
         self.selected_file: Path | None = None
         self.pending_by_id: dict[str, dict[str, Any]] = {}
         self.checked_candidate_ids: set[str] = set()
+        self.knowledge_results_by_id: dict[str, dict[str, Any]] = {}
 
         self.file_var = tk.StringVar(value="Nenhum arquivo selecionado")
         self.status_var = tk.StringVar(value="Pronto")
@@ -133,6 +134,27 @@ class VorquelWatchUI:
             side="left", fill="x", expand=True, padx=8
         )
         ttk.Button(search, text="Buscar", command=self.search_knowledge).pack(side="left")
+        ttk.Button(search, text="Sintetizar", command=self.synthesize_knowledge).pack(
+            side="left", padx=(8, 0)
+        )
+
+        lifecycle = ttk.Frame(brain)
+        lifecycle.pack(fill="x", pady=(8, 0))
+        ttk.Label(lifecycle, text="Knowledge ID selecionado/colado:").pack(side="left")
+        self.knowledge_id_var = tk.StringVar()
+        ttk.Entry(lifecycle, textvariable=self.knowledge_id_var, width=44).pack(
+            side="left", padx=8
+        )
+        ttk.Button(
+            lifecycle,
+            text="Retirar da memória ativa",
+            command=self.withdraw_knowledge_ui,
+        ).pack(side="left")
+        ttk.Button(
+            lifecycle,
+            text="Substituir por...",
+            command=self.supersede_knowledge_ui,
+        ).pack(side="left", padx=(8, 0))
 
         obsidian = ttk.LabelFrame(shell, text="3. Obsidian", padding=10)
         obsidian.pack(fill="x")
@@ -358,8 +380,134 @@ class VorquelWatchUI:
         self._run_async(
             ["brain", "search", query],
             status="Buscando no Brain...",
-            on_success=lambda data: self._show_json(data, "Busca concluída."),
+            on_success=self._after_knowledge_search,
         )
+
+    def _after_knowledge_search(self, data: dict[str, Any]) -> None:
+        items = data.get("items") or []
+        self.knowledge_results_by_id = {
+            str(item.get("knowledge_id") or ""): item
+            for item in items
+            if item.get("knowledge_id")
+        }
+        if len(items) == 1 and items[0].get("knowledge_id"):
+            self.knowledge_id_var.set(str(items[0]["knowledge_id"]))
+        self._show_json(data, f"Busca concluída: {len(items)} item(ns).")
+
+    def synthesize_knowledge(self) -> None:
+        query = self.search_var.get().strip()
+        if not query:
+            messagebox.showwarning("Vorquel Watch", "Digite uma pergunta ou tema para sintetizar.")
+            return
+        self._run_async(
+            ["brain", "synthesize", query],
+            status="Sintetizando conhecimento ativo...",
+            on_success=lambda data: self._show_json(data, "Síntese concluída."),
+        )
+
+    def withdraw_knowledge_ui(self) -> None:
+        knowledge_id = self.knowledge_id_var.get().strip()
+        if not knowledge_id:
+            messagebox.showwarning(
+                "Vorquel Watch",
+                "Informe um knowledge_id (knw_...).",
+            )
+            return
+        reason = self._ask_reason(
+            "Retirar conhecimento",
+            "Motivo da retirada da memória ativa:",
+        )
+        if reason is None:
+            return
+        if not messagebox.askyesno(
+            "Confirmar retirada",
+            f"Retirar {knowledge_id} da memória ativa?\n\n"
+            "O histórico e a provenance serão preservados.",
+        ):
+            return
+        self._run_async(
+            ["brain", "withdraw", knowledge_id, "--reason", reason],
+            status="Retirando conhecimento da memória ativa...",
+            on_success=lambda data: self._show_json(
+                data,
+                "Conhecimento retirado da memória ativa.",
+            ),
+        )
+
+    def supersede_knowledge_ui(self) -> None:
+        knowledge_id = self.knowledge_id_var.get().strip()
+        if not knowledge_id:
+            messagebox.showwarning(
+                "Vorquel Watch",
+                "Informe o knowledge_id antigo (knw_...).",
+            )
+            return
+        replacement = self._ask_text(
+            "Substituir conhecimento",
+            "Knowledge ID substituto (knw_...):",
+        )
+        if replacement is None:
+            return
+        reason = self._ask_reason(
+            "Substituir conhecimento",
+            "Motivo da substituição/correção:",
+        )
+        if reason is None:
+            return
+        if not messagebox.askyesno(
+            "Confirmar substituição",
+            f"Marcar {knowledge_id} como SUPERSEDED por\n{replacement}?\n\n"
+            "O conhecimento antigo continuará no histórico.",
+        ):
+            return
+        self._run_async(
+            ["brain", "supersede", knowledge_id, replacement, "--reason", reason],
+            status="Registrando supersession...",
+            on_success=lambda data: self._show_json(
+                data,
+                "Conhecimento substituído; histórico preservado.",
+            ),
+        )
+
+    def _ask_text(self, title: str, prompt: str) -> str | None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        value = tk.StringVar()
+        result: dict[str, str | None] = {"value": None}
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=prompt).pack(anchor="w")
+        entry = ttk.Entry(frame, textvariable=value, width=64)
+        entry.pack(fill="x", pady=(8, 12))
+        entry.focus_set()
+
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill="x")
+
+        def accept() -> None:
+            clean = value.get().strip()
+            if not clean:
+                messagebox.showwarning(title, "Digite um valor.", parent=dialog)
+                return
+            result["value"] = clean
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Cancelar", command=dialog.destroy).pack(side="right")
+        ttk.Button(buttons, text="Confirmar", command=accept).pack(
+            side="right", padx=(0, 8)
+        )
+        dialog.bind("<Return>", lambda _event: accept())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.wait_window()
+        return result["value"]
+
+    def _ask_reason(self, title: str, prompt: str) -> str | None:
+        return self._ask_text(title, prompt)
 
     def export_obsidian(self) -> None:
         vault = Path(self.vault_var.get().strip())
