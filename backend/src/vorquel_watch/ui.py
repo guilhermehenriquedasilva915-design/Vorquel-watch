@@ -148,6 +148,9 @@ class VorquelWatchUI:
         ttk.Button(vault_row, text="Exportar", command=self.export_obsidian).pack(
             side="left", padx=(8, 0)
         )
+        ttk.Button(vault_row, text="Configurar 3D Graph", command=self.setup_3d_graph).pack(
+            side="left", padx=(8, 0)
+        )
         ttk.Button(vault_row, text="Abrir Vault", command=self.open_vault).pack(
             side="left", padx=(8, 0)
         )
@@ -245,7 +248,7 @@ class VorquelWatchUI:
         self._run_batch_review(candidate_ids, action="approve")
 
     def reject_selected(self) -> None:
-        candidate_ids = self._selected_candidate_ids()
+        candidate_ids = self._checked_candidate_ids()
         if not candidate_ids:
             return
         if not messagebox.askyesno(
@@ -370,6 +373,26 @@ class VorquelWatchUI:
             ["brain", "export-obsidian", "--vault", str(vault)],
             status="Exportando para Obsidian...",
             on_success=lambda data: self._show_json(data, "Exportação concluída."),
+        )
+
+    def setup_3d_graph(self) -> None:
+        vault = Path(self.vault_var.get().strip())
+        if not vault.is_dir():
+            messagebox.showerror("Vorquel Watch", "O caminho do Vault não existe.")
+            return
+        if not messagebox.askyesno(
+            "Configurar 3D Graph",
+            "Aplicar o preset visual da Vorquel ao New 3D Graph?\n\n"
+            "A configuração atual será preservada em backup antes da primeira alteração.",
+        ):
+            return
+        self._run_async(
+            ["brain", "setup-obsidian", "--vault", str(vault)],
+            status="Configurando New 3D Graph...",
+            on_success=lambda data: self._show_json(
+                data,
+                "3D Graph configurado. Reinicie o Obsidian para aplicar.",
+            ),
         )
 
     def open_vault(self) -> None:
