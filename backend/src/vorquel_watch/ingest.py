@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from vorquel_watch.config import Settings
@@ -24,11 +23,11 @@ def _register(
     *,
     external_metadata: dict,
 ) -> dict:
-    """Validate, hash, store and register a media file.
+    """Validate, hash, store and register a local media file.
 
-    Shared by every ingest route. A file that arrived from YouTube goes through
-    exactly the same Source Guard as one picked off the disk: the origin is
-    recorded as metadata, never as a reason to trust the bytes.
+    V1 deliberately has one ingest route: a user-selected local file. URL
+    fetching remains deferred to V1.1 and is not part of the executable
+    control plane.
     """
     content_sha256, byte_size, probe = validate_and_hash(
         source_path,
@@ -90,47 +89,3 @@ def ingest_local_file(path: str, settings: Settings) -> dict:
         external_metadata={"original_filename": _safe_filename(source_path.name)},
     )
 
-
-def ingest_youtube_url(url: str, settings: Settings) -> dict:
-    """Fetch a single YouTube video and ingest it like any local file.
-
-    The URL is typed into the local control plane. It is never an MCP argument,
-    so Claude cannot ask the Watch to fetch anything.
-
-    Downloaded bytes are untrusted exactly like a file from disk: the same
-    Source Guard validates the container, codecs and duration, and the title
-    and uploader are stored as metadata with no authority of their own.
-    """
-    from vorquel_watch.youtube import canonical_video_url, download
-
-    canonical = canonical_video_url(url)
-    workspace = (settings.data_dir / "cache" / "youtube").resolve()
-
-    try:
-        media_path, remote = download(
-            canonical,
-            workspace,
-            max_duration_s=settings.max_duration_ms // 1000,
-            max_bytes=settings.max_source_bytes,
-        )
-        result = _register(
-            media_path,
-            settings,
-            external_metadata={
-                "origin": "youtube",
-                "video_id": remote.video_id,
-                # Title and uploader come from the remote service and are
-                # media-derived text: data, not instructions.
-                "title": _safe_filename(remote.title),
-                "uploader": _safe_filename(remote.uploader or ""),
-                "webpage_url": remote.webpage_url,
-                "announced_duration_s": remote.duration_s,
-            },
-        )
-    finally:
-        # The download is a working copy. Content-addressed storage holds the
-        # canonical object, so the cache directory is not left to grow.
-        shutil.rmtree(workspace, ignore_errors=True)
-
-    result["origin"] = "youtube"
-    return result
