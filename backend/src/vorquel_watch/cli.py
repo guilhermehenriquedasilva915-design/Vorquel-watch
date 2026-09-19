@@ -13,6 +13,7 @@ from vorquel_watch.config import SECRET_ENV_VAR, Settings, default_data_dir
 from vorquel_watch.db import WatchRepository
 from vorquel_watch.ingest import ingest_local_file
 from vorquel_watch.local_storage import LocalStorage
+from vorquel_watch.logging_utils import configure_logging
 from vorquel_watch.worker import run_worker
 
 
@@ -169,6 +170,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 
 def cmd_worker(args: argparse.Namespace) -> int:
+    configure_logging()
     run_worker(once=args.once, poll_seconds=args.poll_seconds)
     return 0
 
