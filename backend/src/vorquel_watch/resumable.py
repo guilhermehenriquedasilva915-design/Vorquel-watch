@@ -113,6 +113,12 @@ def _validate_checkpoint(
         raise RuntimeError("checkpoint position is invalid")
     if int(checkpoint.get("next_ordinal", -1)) < 0:
         raise RuntimeError("checkpoint ordinal is invalid")
+    boundaries = {0, duration_ms}
+    boundaries.update(
+        range(chunk_ms, duration_ms, chunk_ms)
+    )
+    if next_start not in boundaries:
+        raise RuntimeError("checkpoint is not on a chunk boundary")
 
 
 def _transcript_payload(
@@ -256,6 +262,10 @@ def transcribe_resumable(
             engine=descriptor,
         )
     )
+    # A job created by an older compatible build may already own a transcript
+    # with a random opaque id. The database's one-transcript-per-job constraint
+    # is authoritative; resume that transcript instead of inventing a second.
+    transcript_id = str(transcript["transcript_id"])
 
     initial = _base_checkpoint(
         transcript_id=transcript_id,
