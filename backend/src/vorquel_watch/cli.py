@@ -12,6 +12,7 @@ from vorquel_watch import credentials
 from vorquel_watch.config import SECRET_ENV_VAR, Settings, default_data_dir
 from vorquel_watch.db import WatchRepository
 from vorquel_watch.ingest import ingest_local_file
+from vorquel_watch.knowledge import KnowledgeWriter
 from vorquel_watch.local_storage import LocalStorage
 from vorquel_watch.logging_utils import configure_logging
 from vorquel_watch.obsidian_export import export_to_obsidian
@@ -218,6 +219,59 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 
 
+
+def _brain_writer() -> KnowledgeWriter:
+    settings = Settings.from_env()
+    return KnowledgeWriter(WatchRepository(settings))
+
+
+def cmd_brain_list(args: argparse.Namespace) -> int:
+    try:
+        items = _brain_writer().list_candidates(
+            source_id=args.source_id,
+            status=args.status,
+            limit=args.limit,
+        )
+    except (TypeError, ValueError) as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps({"items": items}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_brain_approve(args: argparse.Namespace) -> int:
+    try:
+        item = _brain_writer().approve(args.candidate_id, note=args.note)
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps({"knowledge_item": item}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_brain_reject(args: argparse.Namespace) -> int:
+    try:
+        item = _brain_writer().reject(args.candidate_id, note=args.note)
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps({"candidate": item}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_brain_search(args: argparse.Namespace) -> int:
+    try:
+        items = _brain_writer().search(
+            args.query,
+            domain=args.domain,
+            limit=args.limit,
+        )
+    except (TypeError, ValueError) as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps({"items": items}, ensure_ascii=False, indent=2))
+    return 0
+
 def cmd_brain_export_obsidian(args: argparse.Namespace) -> int:
     settings = Settings.from_env()
     repo = WatchRepository(settings)
@@ -373,6 +427,44 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the local Obsidian vault.",
     )
     export_obsidian.set_defaults(func=cmd_brain_export_obsidian)
+
+    list_candidates = brain_sub.add_parser(
+        "list",
+        help="List reviewed-learning candidates.",
+    )
+    list_candidates.add_argument("--source-id")
+    list_candidates.add_argument(
+        "--status",
+        choices=["PENDING", "APPROVED", "REJECTED"],
+    )
+    list_candidates.add_argument("--limit", type=int, default=50)
+    list_candidates.set_defaults(func=cmd_brain_list)
+
+    approve = brain_sub.add_parser(
+        "approve",
+        help="Promote one candidate after explicit human approval.",
+    )
+    approve.add_argument("candidate_id")
+    approve.add_argument("--note")
+    approve.set_defaults(func=cmd_brain_approve)
+
+    reject = brain_sub.add_parser(
+        "reject",
+        help="Reject one candidate after explicit human intent.",
+    )
+    reject.add_argument("candidate_id")
+    reject.add_argument("--note")
+    reject.set_defaults(func=cmd_brain_reject)
+
+    search = brain_sub.add_parser(
+        "search",
+        help="Search approved Vorquel Brain knowledge.",
+    )
+    search.add_argument("query")
+    search.add_argument("--domain")
+    search.add_argument("--limit", type=int, default=20)
+    search.set_defaults(func=cmd_brain_search)
+
 
     doctor = sub.add_parser("doctor")
     doctor.set_defaults(func=cmd_doctor)
