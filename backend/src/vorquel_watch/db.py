@@ -252,6 +252,7 @@ class WatchRepository:
             .update(
                 {
                     "status": "CANCELLED",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
                     "error_code": None,
                     "error_message": None,
                 }

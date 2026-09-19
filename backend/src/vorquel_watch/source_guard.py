@@ -35,8 +35,24 @@ _ALLOWED_CONTAINERS = {
     "ogg": "audio/ogg",
 }
 
+# These are decoder *implementation* names as PyAV reports them, which are not
+# always the codec name: MP3 decodes as "mp3float", so listing only "mp3"
+# rejected every MP3 file. Measured against the pinned runtime; the container
+# round-trip test is what keeps this set honest when the runtime changes.
+# ("vorbis" is listed but unverified: this build has no libvorbis encoder, so
+# no fixture could be produced for it.)
 _ALLOWED_AUDIO_CODECS = frozenset(
-    {"aac", "mp3", "flac", "opus", "vorbis", "pcm_s16le", "pcm_s24le", "pcm_f32le"}
+    {
+        "aac",
+        "mp3",
+        "mp3float",
+        "flac",
+        "opus",
+        "vorbis",
+        "pcm_s16le",
+        "pcm_s24le",
+        "pcm_f32le",
+    }
 )
 
 _ALLOWED_VIDEO_CODECS = frozenset({"h264", "hevc", "vp8", "vp9", "av1", "mpeg4"})

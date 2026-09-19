@@ -24,8 +24,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install core package
-        run: python -m pip install -e backend
+      # The media runtime is installed here on purpose: the Source Guard tests
+      # (duration regression, container allowlist, host-path leakage) need av,
+      # and without it unittest silently skips the whole suite.
+      - name: Install package with media runtime
+        run: python -m pip install -e "backend[transcribe]"
 
       - name: Dependency check
         run: python -m pip check
@@ -33,8 +36,24 @@ jobs:
       - name: Compile
         run: python -m compileall -q backend/src backend/tests scripts
 
-      - name: Unit tests
-        run: python -m unittest discover -s backend/tests -p 'test_*.py'
+      # A skip is a failure here. The Source Guard suite self-skips when av is
+      # missing, so a dropped media runtime would silently retire the duration
+      # and container-allowlist regression tests instead of breaking the build.
+      - name: Unit tests (skips are failures)
+        run: |
+          python - <<'PY'
+          import sys, unittest
+          suite = unittest.defaultTestLoader.discover(
+              "backend/tests", pattern="test_*.py"
+          )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if result.skipped:
+              for test, reason in result.skipped:
+                  print(f"SKIPPED {test}: {reason}", file=sys.stderr)
+              sys.exit("media-dependent tests must not skip in CI")
+          if not result.wasSuccessful():
+              sys.exit("tests failed")
+          PY
 
       - name: Repository security policy
         run: python scripts/security/check_repo.py
