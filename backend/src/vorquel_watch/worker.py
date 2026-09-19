@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from vorquel_watch.config import Settings
 from vorquel_watch.db import DEFAULT_LEASE_SECONDS, WatchRepository
+from vorquel_watch.logging_utils import configure_logging, log_event
 from vorquel_watch.transcription import (
     FasterWhisperEngine,
     JobCancelled,
@@ -41,6 +42,7 @@ def process_one(
         return False
 
     job_id = claimed["job_id"]
+    source_id = claimed["source_id"]
     try:
         transcript, rows = engine.transcribe_job(
             repo, claimed, worker_id=worker_id, lease_seconds=lease_seconds
@@ -50,7 +52,14 @@ def process_one(
         # cancellation or a reclaim during transcription means this result is no
         # longer ours to record.
         if not repo.heartbeat(job_id, worker_id, lease_seconds):
-            LOG.info("Lease lost before persist; discarding result")
+            log_event(
+                LOG,
+                logging.INFO,
+                "lease_lost",
+                job_id=job_id,
+                source_id=source_id,
+                stage="PRE_PERSIST",
+            )
             return True
 
         repo.update_job(job_id, {"stage": "INDEXING", "progress_permille": 930})
@@ -60,6 +69,14 @@ def process_one(
         # written in one transaction. Raises if the job stopped being RUNNING,
         # so a cancellation that landed mid-persist is never overwritten.
         repo.complete_job(job_id, transcript["transcript_id"])
+        log_event(
+            LOG,
+            logging.INFO,
+            "job_succeeded",
+            job_id=job_id,
+            source_id=source_id,
+            transcript_id=transcript["transcript_id"],
+        )
     except JobCancelled:
         repo.set_terminal_status(
             job_id,
@@ -70,8 +87,23 @@ def process_one(
                 "error_message": None,
             },
         )
+        log_event(
+            LOG,
+            logging.INFO,
+            "job_cancelled",
+            job_id=job_id,
+            source_id=source_id,
+        )
     except ValueError as exc:
-        LOG.warning("Job rejected: %s", type(exc).__name__)
+        log_event(
+            LOG,
+            logging.WARNING,
+            "job_failed",
+            job_id=job_id,
+            source_id=source_id,
+            error_code="INVALID_JOB",
+            exception_type=type(exc).__name__,
+        )
         repo.set_terminal_status(
             job_id,
             {
@@ -82,7 +114,17 @@ def process_one(
             },
         )
     except Exception as exc:
-        LOG.exception("Job failed (%s)", type(exc).__name__)
+        # Deliberately no LOG.exception / exc_info: exception messages and
+        # tracebacks can contain host paths, signed URLs or library internals.
+        log_event(
+            LOG,
+            logging.ERROR,
+            "job_failed",
+            job_id=job_id,
+            source_id=source_id,
+            error_code="PROCESSING_FAILED",
+            exception_type=type(exc).__name__,
+        )
         repo.set_terminal_status(
             job_id,
             {
@@ -143,27 +185,44 @@ def _run_screen_pass(
         for start in range(0, len(result.text_blocks), 500):
             repo.insert_screen_text_blocks(result.text_blocks[start : start + 500])
 
-        LOG.info(
-            "Screen pass: %d observations from %d sampled frames, "
-            "%d OCR runs, %d reused",
-            result.observations_kept,
-            result.frames_sampled,
-            result.ocr_runs,
-            result.ocr_reused,
+        log_event(
+            LOG,
+            logging.INFO,
+            "screen_pass_completed",
+            job_id=job["job_id"],
+            source_id=source["source_id"],
+            observations=result.observations_kept,
+            frames_sampled=result.frames_sampled,
+            ocr_runs=result.ocr_runs,
+            ocr_reused=result.ocr_reused,
+            duration_ms=result.duration_ms,
         )
     except ScreenCancelled:
         # Losing the job is not a screen failure: it must stop the whole job.
         raise JobCancelled() from None
-    except OcrUnavailable:
-        LOG.warning("Screen OCR unavailable; completing with transcript only")
+    except OcrUnavailable as exc:
+        log_event(
+            LOG,
+            logging.WARNING,
+            "screen_pass_degraded",
+            job_id=job["job_id"],
+            source_id=job["source_id"],
+            error_code="OCR_UNAVAILABLE",
+            exception_type=type(exc).__name__,
+        )
     except Exception as exc:
         # The transcript is the job's primary product and it already succeeded.
         # Failing the whole job here would throw away hours of completed
-        # transcription because of a fault in an enhancement, which is strictly
-        # worse than completing with one track. The failure is recorded, not
-        # hidden; surfacing it on the job row is follow-up work.
-        LOG.exception("Screen pass failed (%s); completing with transcript only",
-                      type(exc).__name__)
+        # transcription because of a fault in an enhancement.
+        log_event(
+            LOG,
+            logging.ERROR,
+            "screen_pass_failed",
+            job_id=job["job_id"],
+            source_id=job["source_id"],
+            error_code="SCREEN_PROCESSING_FAILED",
+            exception_type=type(exc).__name__,
+        )
 
 
 def run_worker(
@@ -177,7 +236,13 @@ def run_worker(
     repo.healthcheck()
     engine = FasterWhisperEngine(settings)
     worker_id = new_worker_id()
-    LOG.info("Worker started (lease %ss)", lease_seconds)
+    log_event(
+        LOG,
+        logging.INFO,
+        "worker_started",
+        worker_id=worker_id,
+        lease_seconds=lease_seconds,
+    )
 
     while True:
         worked = process_one(repo, engine, worker_id, lease_seconds)
@@ -188,5 +253,5 @@ def run_worker(
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     run_worker()
