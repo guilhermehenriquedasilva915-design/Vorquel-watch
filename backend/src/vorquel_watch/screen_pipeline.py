@@ -34,7 +34,7 @@ from vorquel_watch.frames import (
     read_timeline,
     sample_frames,
 )
-from vorquel_watch.ids import new_id
+from vorquel_watch.ids import stable_id
 from vorquel_watch.ocr import OcrResult, ScreenOcr
 
 
@@ -133,7 +133,13 @@ def build_screen_observations(
             else:
                 content_hash, reading = match
 
-            observation_id = new_id("obs_")
+            observation_id = stable_id(
+                "obs_",
+                job_id,
+                span.start_ms,
+                span.end_ms,
+                content_hash,
+            )
             observations.append(
                 {
                     "observation_id": observation_id,
@@ -157,7 +163,7 @@ def build_screen_observations(
             for ordinal, block in enumerate(reading.blocks):
                 text_blocks.append(
                     {
-                        "ocr_id": new_id("ocr_"),
+                        "ocr_id": stable_id("ocr_", observation_id, ordinal),
                         "schema_version": "1.0",
                         "observation_id": observation_id,
                         "source_id": source_id,
