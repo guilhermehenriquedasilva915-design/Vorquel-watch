@@ -16,6 +16,7 @@ from vorquel_watch.knowledge import KnowledgeWriter
 from vorquel_watch.local_storage import LocalStorage
 from vorquel_watch.logging_utils import configure_logging
 from vorquel_watch.obsidian_export import export_to_obsidian
+from vorquel_watch.obsidian_setup import setup_obsidian_graph
 from vorquel_watch.service import WatchService
 from vorquel_watch.worker import run_worker
 
@@ -314,6 +315,16 @@ def cmd_brain_search(args: argparse.Namespace) -> int:
     print(json.dumps({"items": items}, ensure_ascii=False, indent=2))
     return 0
 
+def cmd_brain_setup_obsidian(args: argparse.Namespace) -> int:
+    try:
+        result = setup_obsidian_graph(args.vault)
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_brain_export_obsidian(args: argparse.Namespace) -> int:
     settings = Settings.from_env()
     repo = WatchRepository(settings)
@@ -459,6 +470,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     brain = sub.add_parser("brain")
     brain_sub = brain.add_subparsers(dest="brain_command", required=True)
+    setup_obsidian = brain_sub.add_parser(
+        "setup-obsidian",
+        help="Apply the Vorquel preset to the installed New 3D Graph plugin.",
+    )
+    setup_obsidian.add_argument(
+        "--vault",
+        required=True,
+        help="Path to the local Obsidian vault.",
+    )
+    setup_obsidian.set_defaults(func=cmd_brain_setup_obsidian)
+
     export_obsidian = brain_sub.add_parser(
         "export-obsidian",
         help="Export approved knowledge into the Obsidian vault _generated folder.",
