@@ -188,7 +188,7 @@ class WatchRepository:
             "pipeline_version": self.settings.pipeline_version,
             "config_hash": config_hash,
             "language_hint": language_hint,
-            "resume_capable": False,
+            "resume_capable": True,
         }
         try:
             result = self.client.table("processing_jobs").insert(payload).execute()
@@ -309,6 +309,104 @@ class WatchRepository:
         )
         return result.data[0] if result.data else self.get_job(job_id)
 
+    def get_transcript_for_job(self, job_id: str) -> dict[str, Any] | None:
+        result = (
+            self.client.table("transcripts")
+            .select("*")
+            .eq("job_id", job_id)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def ensure_transcript(self, payload: dict[str, Any]) -> dict[str, Any]:
+        existing = self.get_transcript_for_job(payload["job_id"])
+        if existing:
+            return existing
+        try:
+            result = self.client.table("transcripts").insert(payload).execute()
+            return result.data[0]
+        except Exception:
+            existing = self.get_transcript_for_job(payload["job_id"])
+            if existing:
+                return existing
+            raise
+
+    def get_resume_run(self, job_id: str, stage: str) -> dict[str, Any] | None:
+        result = (
+            self.client.table("processing_runs")
+            .select("*")
+            .eq("job_id", job_id)
+            .eq("stage", stage)
+            .in_("status", ["RUNNING", "SUCCEEDED"])
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def ensure_processing_run(
+        self,
+        *,
+        job_id: str,
+        stage: str,
+        checkpoint: dict[str, Any],
+    ) -> dict[str, Any]:
+        existing = self.get_resume_run(job_id, stage)
+        if existing:
+            return existing
+        payload = {
+            "run_id": new_id("run_"),
+            "job_id": job_id,
+            "stage": stage,
+            "status": "RUNNING",
+            "checkpoint": checkpoint,
+        }
+        try:
+            result = self.client.table("processing_runs").insert(payload).execute()
+            return result.data[0]
+        except Exception:
+            existing = self.get_resume_run(job_id, stage)
+            if existing:
+                return existing
+            raise
+
+    def persist_transcription_chunk(
+        self,
+        *,
+        job_id: str,
+        run_id: str,
+        transcript_id: str,
+        segments: list[dict[str, Any]],
+        checkpoint: dict[str, Any],
+    ) -> int:
+        result = self.client.rpc(
+            "persist_transcription_chunk",
+            {
+                "p_job_id": job_id,
+                "p_run_id": run_id,
+                "p_transcript_id": transcript_id,
+                "p_segments": segments,
+                "p_checkpoint": checkpoint,
+            },
+        ).execute()
+        return int(result.data or 0)
+
+    def finish_processing_run(
+        self,
+        run_id: str,
+        *,
+        checkpoint: dict[str, Any],
+        status: str = "SUCCEEDED",
+    ) -> None:
+        self.client.table("processing_runs").update(
+            {
+                "status": status,
+                "checkpoint": checkpoint,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("run_id", run_id).eq("status", "RUNNING").execute()
+
     def create_transcript(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = self.client.table("transcripts").insert(payload).execute()
         return result.data[0]
@@ -324,18 +422,22 @@ class WatchRepository:
         transcript_id: str,
         segment_count: int,
         word_count: int,
+        language: str | None = None,
     ) -> None:
         """Write transcript totals only.
 
         The source pointers and the terminal job status are set by complete_job
         in a single transaction, never piecemeal from here.
         """
-        self.client.table("transcripts").update(
-            {
-                "segment_count": segment_count,
-                "word_count": word_count,
-            }
-        ).eq("transcript_id", transcript_id).execute()
+        values: dict[str, Any] = {
+            "segment_count": segment_count,
+            "word_count": word_count,
+        }
+        if language:
+            values["language"] = language
+        self.client.table("transcripts").update(values).eq(
+            "transcript_id", transcript_id
+        ).execute()
 
     def complete_job(self, job_id: str, transcript_id: str) -> None:
         """Finalize a job atomically (INT-02).
