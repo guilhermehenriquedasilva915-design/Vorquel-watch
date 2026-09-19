@@ -30,6 +30,18 @@ def _codec_name(stream: Any) -> str:
     return str(getattr(codec, "name", "") or "")
 
 
+def _stream_facts(stream: Any) -> dict[str, Any]:
+    context = getattr(stream, "codec_context", None)
+    return {
+        "type": str(stream.type),
+        "codec": _codec_name(stream),
+        "width": int(getattr(context, "width", 0) or 0),
+        "height": int(getattr(context, "height", 0) or 0),
+        "sample_rate": int(getattr(context, "sample_rate", 0) or 0),
+        "channels": int(getattr(context, "channels", 0) or 0),
+    }
+
+
 def probe(path: str) -> dict[str, Any]:
     """Return raw container facts. Never raises for bad media."""
     try:
@@ -39,10 +51,7 @@ def probe(path: str) -> dict[str, Any]:
 
     try:
         with av.open(path, mode="r") as container:
-            streams = [
-                {"type": str(stream.type), "codec": _codec_name(stream)}
-                for stream in container.streams
-            ]
+            streams = [_stream_facts(stream) for stream in container.streams]
             return {
                 "ok": True,
                 "format": container.format.name or "",

@@ -178,6 +178,7 @@ def _run_screen_pass(
             interval_ms=settings.screen_interval_ms,
             change_threshold=settings.screen_change_threshold,
             max_observations=settings.screen_max_observations,
+            max_samples=settings.screen_max_samples,
             keepalive=lambda: repo.heartbeat(job["job_id"], worker_id, lease_seconds),
         )
 

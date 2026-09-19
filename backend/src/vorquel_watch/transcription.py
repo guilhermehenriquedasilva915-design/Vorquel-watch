@@ -109,6 +109,7 @@ class FasterWhisperEngine:
         transcript_id = new_id("trn_")
         rows: list[dict[str, Any]] = []
         word_count = 0
+        text_bytes = 0
         duration_ms = int(source["duration_ms"])
         last_progress = 10
 
@@ -138,6 +139,11 @@ class FasterWhisperEngine:
             text = (segment.text or "").strip()
             if not text:
                 continue
+            if len(rows) >= self.settings.max_transcript_segments:
+                raise ValueError("transcript exceeds configured segment limit")
+            text_bytes += len(text.encode("utf-8"))
+            if text_bytes > self.settings.max_transcript_text_bytes:
+                raise ValueError("transcript exceeds configured text limit")
 
             start_ms = max(0, int(segment.start * 1000))
             end_ms = max(start_ms, int(segment.end * 1000))

@@ -76,6 +76,7 @@ def build_screen_observations(
     interval_ms: int = DEFAULT_INTERVAL_MS,
     change_threshold: float = DEFAULT_CHANGE_THRESHOLD,
     max_observations: int = DEFAULT_MAX_OBSERVATIONS,
+    max_samples: int = 20000,
     keepalive: Callable[[], bool] | None = None,
 ) -> ScreenResult:
     """Produce screen_observations and screen_text_blocks rows for a video.
@@ -93,9 +94,12 @@ def build_screen_observations(
             media_path,
             interval_ms=interval_ms,
             change_threshold=change_threshold,
+            max_samples=max_samples + 1,
         )
     ):
         samples.append(sample)
+        if len(samples) > max_samples:
+            raise ValueError("screen sampling exceeds configured limit")
         if keepalive is not None and index % 200 == 0 and not keepalive():
             raise ScreenCancelled()
 

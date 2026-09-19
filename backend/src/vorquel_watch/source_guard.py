@@ -20,6 +20,10 @@ class ProbeResult:
     has_audio: bool
     video_stream_count: int
     audio_stream_count: int
+    max_video_width: int
+    max_video_height: int
+    max_audio_sample_rate: int
+    max_audio_channels: int
 
 
 # Strict container allowlist. An unlisted container is rejected outright: we do
@@ -134,7 +138,14 @@ def _run_probe(path: Path) -> dict:
     return payload
 
 
-def probe_media(path: Path) -> ProbeResult:
+def probe_media(
+    path: Path,
+    *,
+    max_video_width: int = 3840,
+    max_video_height: int = 2160,
+    max_audio_sample_rate: int = 192000,
+    max_audio_channels: int = 8,
+) -> ProbeResult:
     """Validate media against policy, parsing it out of process.
 
     The parse happens in a child; every policy decision below happens here, in
@@ -165,12 +176,37 @@ def probe_media(path: Path) -> ProbeResult:
     if not audio_streams:
         raise ValueError("media contains no audio stream")
 
+    audio_sample_rates: list[int] = []
+    audio_channels: list[int] = []
     for stream in audio_streams:
         if stream.get("codec") not in _ALLOWED_AUDIO_CODECS:
             raise ValueError("audio codec is not allowed")
+        try:
+            sample_rate = max(0, int(stream.get("sample_rate") or 0))
+            channels = max(0, int(stream.get("channels") or 0))
+        except (TypeError, ValueError):
+            raise ValueError("media probe returned malformed stream metadata") from None
+        if sample_rate > max_audio_sample_rate:
+            raise ValueError("audio sample rate exceeds configured limit")
+        if channels > max_audio_channels:
+            raise ValueError("audio channel count exceeds configured limit")
+        audio_sample_rates.append(sample_rate)
+        audio_channels.append(channels)
+
+    video_widths: list[int] = []
+    video_heights: list[int] = []
     for stream in video_streams:
         if stream.get("codec") not in _ALLOWED_VIDEO_CODECS:
             raise ValueError("video codec is not allowed")
+        try:
+            width = max(0, int(stream.get("width") or 0))
+            height = max(0, int(stream.get("height") or 0))
+        except (TypeError, ValueError):
+            raise ValueError("media probe returned malformed stream metadata") from None
+        if width > max_video_width or height > max_video_height:
+            raise ValueError("video resolution exceeds configured limit")
+        video_widths.append(width)
+        video_heights.append(height)
 
     # duration_raw is in AV_TIME_BASE units (microseconds), so it must be
     # divided by time_base, not multiplied. The original multiplication inflated
@@ -191,6 +227,10 @@ def probe_media(path: Path) -> ProbeResult:
         has_audio=True,
         video_stream_count=len(video_streams),
         audio_stream_count=len(audio_streams),
+        max_video_width=max(video_widths, default=0),
+        max_video_height=max(video_heights, default=0),
+        max_audio_sample_rate=max(audio_sample_rates, default=0),
+        max_audio_channels=max(audio_channels, default=0),
     )
 
 
@@ -199,6 +239,10 @@ def validate_and_hash(
     *,
     max_source_bytes: int,
     max_duration_ms: int,
+    max_video_width: int = 3840,
+    max_video_height: int = 2160,
+    max_audio_sample_rate: int = 192000,
+    max_audio_channels: int = 8,
 ) -> tuple[str, int, ProbeResult]:
     resolved = path.expanduser().resolve(strict=True)
     if not resolved.is_file():
@@ -210,7 +254,13 @@ def validate_and_hash(
     if byte_size > max_source_bytes:
         raise ValueError("source exceeds configured byte limit")
 
-    probe = probe_media(resolved)
+    probe = probe_media(
+        resolved,
+        max_video_width=max_video_width,
+        max_video_height=max_video_height,
+        max_audio_sample_rate=max_audio_sample_rate,
+        max_audio_channels=max_audio_channels,
+    )
     if probe.duration_ms <= 0:
         raise ValueError("unable to determine media duration")
     if probe.duration_ms > max_duration_ms:

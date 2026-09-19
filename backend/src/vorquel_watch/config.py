@@ -128,6 +128,13 @@ class Settings:
     supabase_secret_key: str
     max_source_bytes: int = 25 * 1024 * 1024 * 1024
     max_duration_ms: int = 8 * 60 * 60 * 1000
+    max_video_width: int = 3840
+    max_video_height: int = 2160
+    max_audio_channels: int = 8
+    max_audio_sample_rate: int = 192000
+    max_transcript_segments: int = 50000
+    max_transcript_text_bytes: int = 64 * 1024 * 1024
+    max_export_bytes: int = 128 * 1024 * 1024
     whisper_model: str = "small"
     whisper_model_revision: str | None = None
     whisper_device: str = "cpu"
@@ -139,6 +146,7 @@ class Settings:
     screen_interval_ms: int = 1500
     screen_change_threshold: float = 0.08
     screen_max_observations: int = 4000
+    screen_max_samples: int = 20000
     pipeline_version: str = "watch-alpha/0.1"
 
     @classmethod
@@ -169,6 +177,27 @@ class Settings:
                     str(8 * 60 * 60 * 1000),
                 )
             ),
+            max_video_width=int(os.environ.get("VORQUEL_WATCH_MAX_VIDEO_WIDTH", "3840")),
+            max_video_height=int(os.environ.get("VORQUEL_WATCH_MAX_VIDEO_HEIGHT", "2160")),
+            max_audio_channels=int(os.environ.get("VORQUEL_WATCH_MAX_AUDIO_CHANNELS", "8")),
+            max_audio_sample_rate=int(
+                os.environ.get("VORQUEL_WATCH_MAX_AUDIO_SAMPLE_RATE", "192000")
+            ),
+            max_transcript_segments=int(
+                os.environ.get("VORQUEL_WATCH_MAX_TRANSCRIPT_SEGMENTS", "50000")
+            ),
+            max_transcript_text_bytes=int(
+                os.environ.get(
+                    "VORQUEL_WATCH_MAX_TRANSCRIPT_TEXT_BYTES",
+                    str(64 * 1024 * 1024),
+                )
+            ),
+            max_export_bytes=int(
+                os.environ.get(
+                    "VORQUEL_WATCH_MAX_EXPORT_BYTES",
+                    str(128 * 1024 * 1024),
+                )
+            ),
             whisper_model=os.environ.get(
                 "VORQUEL_WATCH_WHISPER_MODEL", "small"
             ).strip(),
@@ -194,6 +223,9 @@ class Settings:
             ),
             screen_max_observations=int(
                 os.environ.get("VORQUEL_WATCH_SCREEN_MAX_OBSERVATIONS", "4000")
+            ),
+            screen_max_samples=int(
+                os.environ.get("VORQUEL_WATCH_SCREEN_MAX_SAMPLES", "20000")
             ),
             pipeline_version=os.environ.get(
                 "VORQUEL_WATCH_PIPELINE_VERSION", "watch-alpha/0.1"

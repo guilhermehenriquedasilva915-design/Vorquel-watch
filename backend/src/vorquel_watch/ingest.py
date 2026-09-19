@@ -34,6 +34,10 @@ def _register(
         source_path,
         max_source_bytes=settings.max_source_bytes,
         max_duration_ms=settings.max_duration_ms,
+        max_video_width=settings.max_video_width,
+        max_video_height=settings.max_video_height,
+        max_audio_sample_rate=settings.max_audio_sample_rate,
+        max_audio_channels=settings.max_audio_channels,
     )
 
     repo = WatchRepository(settings)
