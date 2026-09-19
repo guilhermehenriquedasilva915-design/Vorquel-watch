@@ -254,7 +254,9 @@ begin
 end
 $$;
 
-create or replace function public.search_knowledge_items(
+drop function if exists public.search_knowledge_items(text,text,integer);
+
+create function public.search_knowledge_items(
   p_query text,
   p_domain text default null,
   p_limit integer default 20
@@ -403,7 +405,9 @@ from hits h
 left join citations c on c.knowledge_id = h.knowledge_id;
 $$;
 
-create or replace function public.export_approved_knowledge(
+drop function if exists public.export_approved_knowledge(integer,integer);
+
+create function public.export_approved_knowledge(
   p_limit integer default 500,
   p_offset integer default 0
 )
