@@ -96,10 +96,10 @@ class VorquelWatchUI:
         ttk.Button(actions, text="Atualizar", command=self.refresh_candidates).pack(
             side="left"
         )
-        ttk.Button(actions, text="Aprovar selecionado", command=self.approve_selected).pack(
+        ttk.Button(actions, text="Aprovar selecionados", command=self.approve_selected).pack(
             side="left", padx=(8, 0)
         )
-        ttk.Button(actions, text="Rejeitar selecionado", command=self.reject_selected).pack(
+        ttk.Button(actions, text="Rejeitar selecionados", command=self.reject_selected).pack(
             side="left", padx=(8, 0)
         )
 
@@ -109,7 +109,7 @@ class VorquelWatchUI:
             columns=columns,
             show="headings",
             height=9,
-            selectmode="browse",
+            selectmode="extended",
         )
         self.candidates.heading("type", text="Tipo")
         self.candidates.heading("domain", text="Domínio")
@@ -200,53 +200,116 @@ class VorquelWatchUI:
         )
 
     def approve_selected(self) -> None:
-        candidate_id = self._selected_candidate_id()
-        if not candidate_id:
+        candidate_ids = self._selected_candidate_ids()
+        if not candidate_ids:
             return
         if not messagebox.askyesno(
             "Confirmar aprovação",
-            "Aprovar este candidate como conhecimento reutilizável?\n\n"
+            f"Aprovar {len(candidate_ids)} candidate(s) como conhecimento reutilizável?\n\n"
             "A aprovação não concede autoridade de instrução.",
         ):
             return
-        self._run_async(
-            [
-                "brain",
-                "approve",
-                candidate_id,
-                "--note",
-                "Aprovado explicitamente pelo usuário via interface local.",
-            ],
-            status="Aprovando candidate...",
-            on_success=lambda data: self._after_review(data, "Candidate aprovado."),
-        )
+        self._run_batch_review(candidate_ids, action="approve")
 
     def reject_selected(self) -> None:
-        candidate_id = self._selected_candidate_id()
-        if not candidate_id:
+        candidate_ids = self._selected_candidate_ids()
+        if not candidate_ids:
             return
         if not messagebox.askyesno(
             "Confirmar rejeição",
-            "Rejeitar este candidate?",
+            f"Rejeitar {len(candidate_ids)} candidate(s)?",
         ):
             return
-        self._run_async(
-            [
-                "brain",
-                "reject",
-                candidate_id,
-                "--note",
-                "Rejeitado explicitamente pelo usuário via interface local.",
-            ],
-            status="Rejeitando candidate...",
-            on_success=lambda data: self._after_review(data, "Candidate rejeitado."),
+        self._run_batch_review(candidate_ids, action="reject")
+
+    def _run_batch_review(self, candidate_ids: list[str], *, action: str) -> None:
+        if self._busy:
+            messagebox.showinfo(
+                "Vorquel Watch",
+                "Aguarde a operação atual terminar.",
+            )
+            return
+
+        self._busy = True
+        self.progress.start(10)
+        verb = "Aprovando" if action == "approve" else "Rejeitando"
+        self.status_var.set(f"{verb} {len(candidate_ids)} candidate(s)...")
+
+        def worker() -> None:
+            results: list[dict[str, Any]] = []
+            child_env = os.environ.copy()
+            child_env["PYTHONIOENCODING"] = "utf-8"
+
+            for candidate_id in candidate_ids:
+                note = (
+                    "Aprovado explicitamente pelo usuário via interface local em seleção múltipla."
+                    if action == "approve"
+                    else "Rejeitado explicitamente pelo usuário via interface local em seleção múltipla."
+                )
+                command = [
+                    sys.executable,
+                    "-m",
+                    "vorquel_watch.cli",
+                    "brain",
+                    action,
+                    candidate_id,
+                    "--note",
+                    note,
+                ]
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="strict",
+                    env=child_env,
+                    check=False,
+                )
+                stdout = completed.stdout.strip()
+                stderr = completed.stderr.strip()
+                if completed.returncode != 0:
+                    self.root.after(
+                        0,
+                        lambda cid=candidate_id, msg=(stderr or stdout or "Falha sem detalhes."):
+                            self._finish_error(
+                                f"Falha em {cid}:\n{msg}",
+                                quiet=False,
+                            ),
+                    )
+                    return
+                try:
+                    payload = json.loads(stdout) if stdout else {}
+                except json.JSONDecodeError:
+                    payload = {"output": stdout}
+                results.append({"candidate_id": candidate_id, "result": payload})
+
+            self.root.after(
+                0,
+                lambda: self._finish_batch_review(results, action=action),
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_batch_review(
+        self,
+        results: list[dict[str, Any]],
+        *,
+        action: str,
+    ) -> None:
+        self._busy = False
+        self.progress.stop()
+        label = "aprovado(s)" if action == "approve" else "rejeitado(s)"
+        self._show_json(
+            {"count": len(results), "items": results},
+            f"{len(results)} candidate(s) {label}.",
         )
+        self.refresh_candidates()
 
     def show_candidate_details(self, _event=None) -> None:
-        candidate_id = self._selected_candidate_id()
-        if not candidate_id:
+        candidate_ids = self._selected_candidate_ids(show_warning=False)
+        if not candidate_ids:
             return
-        candidate = self.pending_by_id.get(candidate_id)
+        candidate = self.pending_by_id.get(candidate_ids[0])
         if not candidate:
             return
         self._show_json({"candidate": candidate}, "Candidate selecionado.")
@@ -289,15 +352,18 @@ class VorquelWatchUI:
             return
         os.startfile(str(vault))  # type: ignore[attr-defined]
 
-    def _selected_candidate_id(self) -> str | None:
-        selection = self.candidates.selection()
-        if not selection:
+    def _selected_candidate_ids(
+        self,
+        *,
+        show_warning: bool = True,
+    ) -> list[str]:
+        selection = list(self.candidates.selection())
+        if not selection and show_warning:
             messagebox.showwarning(
                 "Vorquel Watch",
-                "Selecione um candidate primeiro.",
+                "Selecione um ou mais candidates primeiro.",
             )
-            return None
-        return selection[0]
+        return selection
 
     def _after_analysis(self, data: dict[str, Any]) -> None:
         self._show_json(data, "Análise concluída.")
