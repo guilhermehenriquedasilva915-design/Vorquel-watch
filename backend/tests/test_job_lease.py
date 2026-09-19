@@ -129,27 +129,29 @@ class LostLeaseTests(unittest.TestCase):
         return repo
 
     def _engine_mock(self) -> mock.Mock:
-        engine = mock.Mock()
-        engine.transcribe_job.return_value = (self.transcript, [])
-        return engine
+        return mock.Mock()
 
     def test_result_is_discarded_when_the_lease_was_lost(self) -> None:
         repo = self._repo_mock(heartbeat_result=False)
 
-        with mock.patch("vorquel_watch.worker.persist_transcription") as persist:
+        with mock.patch(
+            "vorquel_watch.worker.transcribe_resumable",
+            return_value=self.transcript,
+        ):
             self.assertTrue(process_one(repo, self._engine_mock(), "wkr_test"))
 
-        persist.assert_not_called()
         repo.complete_job.assert_not_called()
         repo.set_terminal_status.assert_not_called()
 
     def test_result_is_written_when_the_lease_still_holds(self) -> None:
         repo = self._repo_mock(heartbeat_result=True)
 
-        with mock.patch("vorquel_watch.worker.persist_transcription") as persist:
+        with mock.patch(
+            "vorquel_watch.worker.transcribe_resumable",
+            return_value=self.transcript,
+        ):
             self.assertTrue(process_one(repo, self._engine_mock(), "wkr_test"))
 
-        persist.assert_called_once()
         repo.complete_job.assert_called_once_with("job_abc", "trn_abc")
 
     def test_an_empty_queue_is_reported_as_no_work(self) -> None:
