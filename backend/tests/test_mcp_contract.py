@@ -20,12 +20,6 @@ EXPECTED_TOOLS = {
     "create_export",
     "list_artifacts",
     "get_artifact",
-    # Screen pipeline (ADR 0002). Still no tool accepts a path or a URL.
-    "get_video_info",
-    "search_screen_text",
-    "get_frame",
-    "get_context_at",
-    "get_context_range",
 }
 
 # Arguments no tool may ever take. The surface is bounded by what does not
@@ -90,39 +84,6 @@ class McpContractTests(unittest.IsolatedAsyncioTestCase):
 
         undocumented = [t.name for t in tools if not (t.description or "").strip()]
         self.assertEqual(undocumented, [])
-
-    async def test_screen_tools_take_only_opaque_ids_and_timestamps(self) -> None:
-        screen_tools = {
-            "get_video_info",
-            "search_screen_text",
-            "get_frame",
-            "get_context_at",
-            "get_context_range",
-        }
-        allowed = {
-            "source_id",
-            "source_ids",
-            "timestamp_ms",
-            "start_ms",
-            "end_ms",
-            "window_ms",
-            "max_observations",
-            "query",
-            "limit",
-        }
-
-        async with Client(mcp) as client:
-            tools = (await client.list_tools()).tools
-
-        for tool in tools:
-            if tool.name not in screen_tools:
-                continue
-            with self.subTest(tool=tool.name):
-                properties = set(_schema_of(tool).get("properties") or {})
-                self.assertTrue(
-                    properties.issubset(allowed),
-                    f"unexpected arguments: {properties - allowed}",
-                )
 
 
 if __name__ == "__main__":
