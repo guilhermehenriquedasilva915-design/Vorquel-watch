@@ -958,6 +958,74 @@ class WatchRepository:
         ).execute()
         return result.data or []
 
+    def withdraw_knowledge_item(
+        self,
+        *,
+        knowledge_id: str,
+        event_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        result = self.client.rpc(
+            "withdraw_knowledge_item",
+            {
+                "p_knowledge_id": knowledge_id,
+                "p_event_id": event_id,
+                "p_reason": reason,
+            },
+        ).execute()
+        rows = result.data or []
+        if isinstance(rows, dict):
+            return rows
+        if not rows:
+            raise RuntimeError("knowledge withdrawal returned no row")
+        return rows[0]
+
+    def supersede_knowledge_item(
+        self,
+        *,
+        knowledge_id: str,
+        replacement_knowledge_id: str,
+        event_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        result = self.client.rpc(
+            "supersede_knowledge_item",
+            {
+                "p_knowledge_id": knowledge_id,
+                "p_replacement_knowledge_id": replacement_knowledge_id,
+                "p_event_id": event_id,
+                "p_reason": reason,
+            },
+        ).execute()
+        rows = result.data or []
+        if isinstance(rows, dict):
+            return rows
+        if not rows:
+            raise RuntimeError("knowledge supersession returned no row")
+        return rows[0]
+
+    def synthesize_knowledge_context(
+        self,
+        *,
+        query: str,
+        domain: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        result = self.client.rpc(
+            "synthesize_knowledge_context",
+            {
+                "p_query": query,
+                "p_domain": domain,
+                "p_limit": int(limit),
+            },
+        ).execute()
+        data = result.data or {}
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        if not isinstance(data, dict):
+            raise RuntimeError("knowledge synthesis returned invalid payload")
+        return data
+
 
     def export_approved_knowledge(
         self,
