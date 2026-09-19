@@ -50,12 +50,7 @@ create table vorquel_knowledge.knowledge_reviews (
   action text not null check (action in ('APPROVE','REJECT')),
   actor_type text not null default 'HUMAN' check (actor_type = 'HUMAN'),
   note text,
-  created_at timestamptz not null default now(),
-  unique (knowledge_id, source_id),
-  constraint knowledge_items_candidate_source_fkey
-    foreign key (candidate_id, source_id)
-    references vorquel_knowledge.knowledge_candidates(candidate_id, source_id)
-    on delete restrict
+  created_at timestamptz not null default now()
 );
 
 create table vorquel_knowledge.knowledge_items (
@@ -84,7 +79,12 @@ create table vorquel_knowledge.knowledge_items (
   instruction_authority text not null default 'NONE'
     check (instruction_authority = 'NONE'),
   approved_at timestamptz not null default now(),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  unique (knowledge_id, source_id),
+  constraint knowledge_items_candidate_source_fkey
+    foreign key (candidate_id, source_id)
+    references vorquel_knowledge.knowledge_candidates(candidate_id, source_id)
+    on delete restrict
 );
 
 create table vorquel_knowledge.knowledge_sources (
