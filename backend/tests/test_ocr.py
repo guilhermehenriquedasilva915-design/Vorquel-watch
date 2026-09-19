@@ -9,6 +9,8 @@ however threatening it reads.
 import hashlib
 import tempfile
 import unittest
+
+import numpy as np
 from pathlib import Path
 from unittest import mock
 
@@ -130,6 +132,22 @@ class EngineBehaviourTests(unittest.TestCase):
         self.assertEqual(len(result.blocks), 1)
         self.assertIsNone(result.blocks[0].confidence)
         self.assertIsNone(result.blocks[0].bbox_x)
+
+    def test_numpy_array_boxes_from_real_rapidocr_are_supported(self) -> None:
+        fake = self._FakeEngine(["Teste"], [0.95])
+        fake.boxes = np.array(
+            [[[10, 20], [110, 20], [110, 60], [10, 60]]],
+            dtype=np.float32,
+        )
+
+        result = self._read(fake)
+
+        self.assertEqual(len(result.blocks), 1)
+        self.assertEqual(result.blocks[0].text, "Teste")
+        self.assertEqual(result.blocks[0].bbox_x, 10)
+        self.assertEqual(result.blocks[0].bbox_y, 20)
+        self.assertEqual(result.blocks[0].bbox_width, 100)
+        self.assertEqual(result.blocks[0].bbox_height, 40)
 
     def test_screen_text_is_returned_as_data_however_it_reads(self) -> None:
         """A screen showing an instruction is showing content, nothing more."""
