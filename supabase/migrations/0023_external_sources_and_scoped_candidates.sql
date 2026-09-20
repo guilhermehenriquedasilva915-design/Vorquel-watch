@@ -247,6 +247,7 @@ declare
   v_kind      text;
   v_locator   jsonb;
   v_resolved  text;
+  v_inserted  text;
   v_reused    boolean := false;
 begin
   select * into v_source
@@ -288,7 +289,8 @@ begin
     p_scope_type, p_scope_id, p_data_classification
   )
   on conflict on constraint knowledge_candidates_source_id_content_hash_key
-  do nothing;
+  do nothing
+  returning candidate_id into v_inserted;
 
   -- Same source + same content hash is the same candidate. Re-learning a
   -- source must not multiply its candidates.
@@ -297,7 +299,10 @@ begin
   where c.source_id = p_source_id and c.content_hash = p_content_hash
   limit 1;
 
-  v_reused := v_resolved is distinct from p_candidate_id;
+  -- Reuse is decided by whether this call inserted anything, not by comparing
+  -- ids: a caller that derives candidate_id from the content passes the same id
+  -- on every replay, and an id comparison would report every replay as new.
+  v_reused := v_inserted is null;
 
   if not exists (
     select 1 from vorquel_knowledge.knowledge_sources ks

@@ -174,7 +174,26 @@ begin
   end if;
 end $$;
 
--- Re-learning the same source with the same content hash is idempotent.
+-- Re-learning the same source with the same content hash is idempotent, and
+-- says so. The Brain derives candidate_id from the content, so a replay passes
+-- the identical id; reuse has to be detected from the write, not from the id.
+do $$
+declare
+  v_reused boolean;
+begin
+  select reused into v_reused
+  from public.create_knowledge_candidate_scoped(
+    'knd_pdf_pending', 'src_pdf_v1', 'PROCEDURE', 'n8n',
+    'Retry policy for HTTP Request',
+    'Set retryOnFail with a bounded maxTries instead of an unbounded loop.',
+    'DECLARADO', repeat('b', 64),
+    'GLOBAL_VORQUEL', 'GLOBAL', 'INTERNAL');
+
+  if not v_reused then
+    raise exception 'an identical replay was reported as a new candidate';
+  end if;
+end $$;
+
 select public.create_knowledge_candidate_scoped(
   'knd_pdf_duplicate', 'src_pdf_v1', 'PROCEDURE', 'n8n',
   'Retry policy for HTTP Request',
