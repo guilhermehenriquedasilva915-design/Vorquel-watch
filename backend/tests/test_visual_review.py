@@ -150,6 +150,17 @@ class VisualReviewTests(unittest.TestCase):
         self.assertEqual(len(cues), 1)
         self.assertAlmostEqual(cues[0].timestamp_ms, 3_100, delta=200)
 
+    def test_short_video_budget_expands_for_boundaries_and_pinned_cue(self) -> None:
+        result = self.extract(mode="balanced", timestamps_ms=[2_100])
+
+        self.assertGreaterEqual(result.kept_count, 3)
+        self.assertTrue(
+            any(
+                frame.selection_reason is SelectionReason.TRANSCRIPT_CUE
+                for frame in result.frames
+            )
+        )
+
     def test_focused_range_only_returns_absolute_timestamps_in_window(self) -> None:
         result = self.extract(
             mode="detailed",

@@ -240,9 +240,13 @@ def extract_frames(
     candidate_count = len(candidates)
     deduplicated = _deduplicate(candidates, dedup_threshold)
     deduplicated_count = len(deduplicated)
+    mandatory_indexes = {0, len(deduplicated) - 1}
+    mandatory_indexes.update(
+        index for index, candidate in enumerate(deduplicated) if candidate.pinned
+    )
     effective_target = min(
         budget.hard_cap,
-        max(budget.target_count, sum(candidate.pinned for candidate in deduplicated)),
+        max(budget.target_count, len(mandatory_indexes)),
     )
     selected = _evenly_cap(deduplicated, effective_target)
 
