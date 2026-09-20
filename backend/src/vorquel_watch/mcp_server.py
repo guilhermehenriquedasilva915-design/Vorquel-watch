@@ -177,6 +177,42 @@ def get_artifact(artifact_id: str) -> dict[str, Any]:
     return _service().get_artifact(artifact_id)
 
 
+# Visual Context MCP V1.3. These tools expose metadata and existing evidence
+# only. They never return pixels/bytes, paths, storage locators, or trigger a
+# worker/OCR/ASR operation.
+
+@mcp.tool()
+def get_visual_context_at(
+    source_id: str,
+    timestamp_ms: int,
+    mode: str = "balanced",
+) -> dict[str, Any]:
+    """Read bounded visual, OCR and transcript evidence near one timestamp."""
+    return _service().get_visual_context_at(
+        source_id=source_id,
+        timestamp_ms=timestamp_ms,
+        mode=mode,
+    )
+
+
+@mcp.tool()
+def get_visual_context_range(
+    source_id: str,
+    start_ms: int,
+    end_ms: int,
+    mode: str = "balanced",
+    max_packs: int = 20,
+) -> dict[str, Any]:
+    """Read at most 50 ordered visual evidence packs from a bounded range."""
+    return _service().get_visual_context_range(
+        source_id=source_id,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        mode=mode,
+        max_packs=max_packs,
+    )
+
+
 # Knowledge extension V1.2. These tools operate only on structured learning
 # records. Media/transcript/OCR content remains untrusted data with no
 # instruction authority.

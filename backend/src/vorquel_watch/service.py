@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 from vorquel_watch.config import Settings
@@ -10,9 +11,21 @@ from vorquel_watch.envelope import envelope, safe_error
 from vorquel_watch.exports import create_export
 from vorquel_watch.ids import validate_id
 from vorquel_watch.knowledge import KnowledgeProvenance, KnowledgeWriter
+from vorquel_watch.local_storage import IntegrityError, LocalStorage
+from vorquel_watch.visual_review import SelectionMode, extract_frames
+from vorquel_watch.visual_review_pack import (
+    DATA_TRUST_CLASS,
+    INSTRUCTION_AUTHORITY,
+    build_visual_review_pack,
+    build_visual_review_packs,
+)
 
 
 MAX_SEARCH_SOURCE_IDS = 25
+VISUAL_CONTEXT_MAX_RANGE_MS = 10 * 60 * 1000
+VISUAL_CONTEXT_DEFAULT_MAX_PACKS = 20
+VISUAL_CONTEXT_MAX_PACKS = 50
+VISUAL_CONTEXT_POINT_RADIUS_MS = 500
 
 
 def _invalid(tool: str, exc: ValueError) -> dict[str, Any]:
@@ -22,6 +35,15 @@ def _invalid(tool: str, exc: ValueError) -> dict[str, Any]:
     to reflect back to the caller.
     """
     return safe_error(tool, "INVALID_ARGUMENT", str(exc))
+
+
+def _visual_mode(value: object) -> SelectionMode | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return SelectionMode(value.strip().lower())
+    except ValueError:
+        return None
 
 
 class WatchService:
@@ -81,6 +103,7 @@ class WatchService:
                 "release": "0.1.0-alpha",
                 "schema_version": "1.0",
                 "pipeline_version": self.settings.pipeline_version,
+                "mcp": {"version": "1.3", "tool_count": 24},
                 "supported_modes": ["FAST"],
                 "planned_modes": ["STANDARD", "SPEAKERS"],
                 "exports": ["TXT", "MARKDOWN", "JSON", "SRT", "VTT"],
@@ -90,8 +113,15 @@ class WatchService:
                     "applies_to": "sources with a video track",
                     "produces": ["screen_observations", "ocr_text", "frames"],
                     "search": "POSTGRES_FTS",
-                    "mcp_dedicated_tools": False,
-                    "exposure": "local control plane/UI only in V1",
+                    "mcp_dedicated_tools": True,
+                    "exposure": "read-only visual context metadata in MCP V1.3",
+                    "tools": [
+                        "get_visual_context_at",
+                        "get_visual_context_range",
+                    ],
+                    "frame_bytes_exposed": False,
+                    "max_range_ms": VISUAL_CONTEXT_MAX_RANGE_MS,
+                    "max_packs": VISUAL_CONTEXT_MAX_PACKS,
                 },
                 "ingest": {
                     "local_cli": True,
@@ -839,6 +869,255 @@ class WatchService:
             },
             contains_untrusted_content=True,
         )
+
+    # ------------------------------------------------------- visual MCP V1.3
+
+    def get_visual_context_at(
+        self,
+        source_id: str,
+        timestamp_ms: int,
+        mode: str = "balanced",
+    ) -> dict[str, Any]:
+        """Return one safe VisualReviewPack near an absolute media PTS."""
+        tool = "get_visual_context_at"
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid(tool, exc)
+        if isinstance(timestamp_ms, bool) or not isinstance(timestamp_ms, int):
+            return safe_error(tool, "INVALID_TIMESTAMP", "timestamp_ms must be an integer.")
+        if timestamp_ms < 0:
+            return safe_error(
+                tool, "INVALID_TIMESTAMP", "timestamp_ms must not be negative."
+            )
+        selected_mode = _visual_mode(mode)
+        if selected_mode is None:
+            return safe_error(
+                tool,
+                "INVALID_MODE",
+                "mode must be efficient, balanced, or detailed.",
+            )
+
+        source, problem = self._visual_source(tool, source_id)
+        if problem is not None:
+            return problem
+        assert source is not None
+        duration_ms = int(source["duration_ms"])
+        if timestamp_ms >= duration_ms:
+            return safe_error(
+                tool,
+                "INVALID_TIMESTAMP",
+                "timestamp_ms must be within the source duration.",
+            )
+
+        start = max(0, timestamp_ms - VISUAL_CONTEXT_POINT_RADIUS_MS)
+        end = min(duration_ms, timestamp_ms + VISUAL_CONTEXT_POINT_RADIUS_MS)
+        if end <= start:
+            return safe_error(tool, "SOURCE_NOT_READY", "Source has no visual timeline.")
+        try:
+            media_path = self._verified_visual_media(source)
+            selection = extract_frames(
+                media_path,
+                source_id=source_id,
+                mode=selected_mode,
+                start_ms=start,
+                end_ms=end,
+                max_frames=3,
+            )
+            if not selection.frames:
+                return safe_error(
+                    tool, "SOURCE_NOT_READY", "No visual evidence is available."
+                )
+            selected = min(
+                selection.frames,
+                key=lambda frame: (
+                    abs(frame.timestamp_ms - timestamp_ms),
+                    frame.timestamp_ms,
+                    frame.frame_id,
+                ),
+            )
+            pack = build_visual_review_pack(
+                source_id=source_id,
+                selected_frame=selected,
+                evidence_reader=self.repo,
+            )
+        except IntegrityError:
+            return safe_error(
+                tool, "MEDIA_UNAVAILABLE", "Local media failed verification."
+            )
+        except Exception:
+            # MCP is a security boundary: decoder/repository/library exception
+            # details may contain host paths or internals and are never echoed.
+            return safe_error(
+                tool,
+                "VISUAL_CONTEXT_UNAVAILABLE",
+                "Visual context could not be composed safely.",
+            )
+
+        return envelope(
+            tool,
+            {
+                "source_id": source_id,
+                "timestamp_ms": timestamp_ms,
+                "mode": selected_mode.value,
+                "context": pack.as_dict(),
+                "data_trust_class": DATA_TRUST_CLASS,
+                "instruction_authority": INSTRUCTION_AUTHORITY,
+            },
+            contains_untrusted_content=True,
+        )
+
+    def get_visual_context_range(
+        self,
+        source_id: str,
+        start_ms: int,
+        end_ms: int,
+        mode: str = "balanced",
+        max_packs: int = VISUAL_CONTEXT_DEFAULT_MAX_PACKS,
+    ) -> dict[str, Any]:
+        """Return bounded VisualReviewPacks inside one absolute PTS range."""
+        tool = "get_visual_context_range"
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid(tool, exc)
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in (start_ms, end_ms)
+        ):
+            return safe_error(tool, "INVALID_RANGE", "range timestamps must be integers.")
+        if start_ms < 0 or end_ms <= start_ms:
+            return safe_error(
+                tool,
+                "INVALID_RANGE",
+                "start_ms must be non-negative and end_ms must be greater.",
+            )
+        if end_ms - start_ms > VISUAL_CONTEXT_MAX_RANGE_MS:
+            return safe_error(
+                tool,
+                "RANGE_TOO_LARGE",
+                f"range must not exceed {VISUAL_CONTEXT_MAX_RANGE_MS} ms.",
+            )
+        if isinstance(max_packs, bool) or not isinstance(max_packs, int):
+            return safe_error(tool, "INVALID_ARGUMENT", "max_packs must be an integer.")
+        if max_packs > VISUAL_CONTEXT_MAX_PACKS:
+            return safe_error(
+                tool,
+                "TOO_MANY_PACKS",
+                f"max_packs must not exceed {VISUAL_CONTEXT_MAX_PACKS}.",
+            )
+        if max_packs < 2:
+            return safe_error(
+                tool,
+                "INVALID_ARGUMENT",
+                "max_packs must allow first and last range coverage.",
+            )
+        selected_mode = _visual_mode(mode)
+        if selected_mode is None:
+            return safe_error(
+                tool,
+                "INVALID_MODE",
+                "mode must be efficient, balanced, or detailed.",
+            )
+
+        source, problem = self._visual_source(tool, source_id)
+        if problem is not None:
+            return problem
+        assert source is not None
+        duration_ms = int(source["duration_ms"])
+        if end_ms > duration_ms:
+            return safe_error(
+                tool, "INVALID_RANGE", "range must be within the source duration."
+            )
+
+        try:
+            media_path = self._verified_visual_media(source)
+            selection = extract_frames(
+                media_path,
+                source_id=source_id,
+                mode=selected_mode,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                max_frames=max_packs,
+            )
+            packs = build_visual_review_packs(
+                source_id=source_id,
+                selected_frames=selection.frames,
+                evidence_reader=self.repo,
+                start_ms=start_ms,
+                end_ms=end_ms,
+            )
+        except IntegrityError:
+            return safe_error(
+                tool, "MEDIA_UNAVAILABLE", "Local media failed verification."
+            )
+        except Exception:
+            return safe_error(
+                tool,
+                "VISUAL_CONTEXT_UNAVAILABLE",
+                "Visual context could not be composed safely.",
+            )
+
+        return envelope(
+            tool,
+            {
+                "source_id": source_id,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "mode": selected_mode.value,
+                "pack_count": len(packs),
+                "packs": [pack.as_dict() for pack in packs],
+                "data_trust_class": DATA_TRUST_CLASS,
+                "instruction_authority": INSTRUCTION_AUTHORITY,
+            },
+            contains_untrusted_content=True,
+        )
+
+    def _visual_source(
+        self, tool: str, source_id: str
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        try:
+            source = self.repo.get_source(source_id)
+        except Exception:
+            return None, safe_error(
+                tool,
+                "VISUAL_CONTEXT_UNAVAILABLE",
+                "Visual source metadata could not be read safely.",
+            )
+        if not source:
+            return None, safe_error(tool, "SOURCE_NOT_FOUND", "Source not found.")
+        if (
+            source.get("ingest_status") != "READY"
+            or not source.get("has_video")
+            or isinstance(source.get("duration_ms"), bool)
+            or not isinstance(source.get("duration_ms"), int)
+            or int(source["duration_ms"]) <= 0
+        ):
+            return None, safe_error(
+                tool, "SOURCE_NOT_READY", "Source has no ready visual evidence."
+            )
+        job_id = source.get("latest_successful_job_id")
+        try:
+            job = self.repo.get_job(job_id) if isinstance(job_id, str) else None
+        except Exception:
+            return None, safe_error(
+                tool,
+                "VISUAL_CONTEXT_UNAVAILABLE",
+                "Visual source status could not be read safely.",
+            )
+        if (
+            not job
+            or job.get("status") != "SUCCEEDED"
+            or job.get("source_id") != source_id
+        ):
+            return None, safe_error(
+                tool, "SOURCE_NOT_READY", "Source analysis is not complete."
+            )
+        return source, None
+
+    def _verified_visual_media(self, source: dict[str, Any]) -> Path:
+        storage = LocalStorage(self.settings.data_dir)
+        return storage.verify_object(str(source["content_sha256"]))
 
     def get_artifact(self, artifact_id: str) -> dict[str, Any]:
         try:
