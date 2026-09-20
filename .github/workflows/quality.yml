@@ -116,3 +116,64 @@ jobs:
         run: |
           python -m pip_audit --requirement backend/requirements.lock --format=cyclonedx-json --output sbom.cyclonedx.json --progress-spinner off
           python scripts/ci/check_sbom.py sbom.cyclonedx.json
+
+  # The knowledge store is the part of this repo the n8n Brain reads through.
+  # Until now no job applied a migration anywhere, so a schema regression could
+  # only be found by applying it live. This job applies the whole set to a
+  # disposable PostgreSQL and asserts the isolation, review and versioning
+  # invariants. It never touches the managed project.
+  knowledge-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Bootstrap Supabase-provisioned roles
+        run: psql -v ON_ERROR_STOP=1 -f supabase/tests/bootstrap.sql
+
+      - name: Apply every migration in order
+        shell: bash
+        run: |
+          set -euo pipefail
+          for migration in supabase/migrations/[0-9]*.sql; do
+            echo "== $migration"
+            psql -v ON_ERROR_STOP=1 -f "$migration"
+          done
+
+      - name: Scope isolation, review gate and source versioning
+        run: psql -v ON_ERROR_STOP=1 -f supabase/tests/knowledge_scope_and_external_sources.sql
+
+      - name: Migrations are re-appliable
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 0021/0022/0023 are the ones that will be applied to a project that
+          # already has rows, so they must be safe to run twice.
+          for migration in \
+            supabase/migrations/0021_knowledge_scope_and_generic_provenance.sql \
+            supabase/migrations/0022_scoped_knowledge_retrieval.sql \
+            supabase/migrations/0023_external_sources_and_scoped_candidates.sql; do
+            echo "== re-apply $migration"
+            psql -v ON_ERROR_STOP=1 -f "$migration"
+          done
