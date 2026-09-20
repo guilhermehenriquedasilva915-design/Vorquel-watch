@@ -173,7 +173,8 @@ jobs:
           for migration in \
             supabase/migrations/0021_knowledge_scope_and_generic_provenance.sql \
             supabase/migrations/0022_scoped_knowledge_retrieval.sql \
-            supabase/migrations/0023_external_sources_and_scoped_candidates.sql; do
+            supabase/migrations/0023_external_sources_and_scoped_candidates.sql \
+            supabase/migrations/0024_restrict_scoped_knowledge_rpc_execution.sql; do
             echo "== re-apply $migration"
             psql -v ON_ERROR_STOP=1 -f "$migration"
           done

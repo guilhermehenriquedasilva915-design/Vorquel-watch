@@ -1,6 +1,6 @@
 \set ON_ERROR_STOP on
 
--- Invariants of 0021, 0022 and 0023.
+-- Invariants of 0021, 0022, 0023 and 0024.
 --
 -- These are the gates that decide whether LEARN + ASK can be trusted at all:
 -- one client must never read another's knowledge, a secret must never become
@@ -28,19 +28,29 @@ begin
   end if;
 end $$;
 
--- The scoped retrieval surface must not be reachable by a browser-side role.
+-- No scoped SECURITY DEFINER RPC may be reachable by a browser-side role.
 do $$
+declare
+  v_fn regprocedure;
 begin
-  if has_function_privilege(
-       'anon',
-       'public.search_knowledge_items_scoped(text,text,text,text,integer)',
-       'EXECUTE')
-     or has_function_privilege(
-       'authenticated',
-       'public.search_knowledge_items_scoped(text,text,text,text,integer)',
-       'EXECUTE') then
-    raise exception 'client role can execute scoped knowledge retrieval';
-  end if;
+  foreach v_fn in array array[
+    'public.search_knowledge_items_scoped(text,text,text,text,integer)'::regprocedure,
+    'public.register_external_source(text,text,text,bigint,text,text,text,text,text,jsonb)'::regprocedure,
+    'public.create_knowledge_candidate_scoped(text,text,text,text,text,text,text,text,text,text,text,jsonb)'::regprocedure,
+    'public.approve_knowledge_candidates_batch(text[],text,text)'::regprocedure
+  ] loop
+    if has_function_privilege('anon', v_fn, 'EXECUTE')
+       or has_function_privilege('authenticated', v_fn, 'EXECUTE') then
+      raise exception 'browser-side role can execute backend-only RPC %', v_fn;
+    end if;
+    if not has_function_privilege('service_role', v_fn, 'EXECUTE') then
+      raise exception 'service_role lost EXECUTE on %', v_fn;
+    end if;
+    if exists (select 1 from pg_roles where rolname = 'watch_runtime')
+       and not has_function_privilege('watch_runtime', v_fn, 'EXECUTE') then
+      raise exception 'watch_runtime lost EXECUTE on %', v_fn;
+    end if;
+  end loop;
 end $$;
 
 -- ---------------------------------------------------------------------------
