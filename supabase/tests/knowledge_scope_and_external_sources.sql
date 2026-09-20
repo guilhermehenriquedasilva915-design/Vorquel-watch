@@ -29,7 +29,7 @@ begin
 end $$;
 
 -- No scoped SECURITY DEFINER RPC may be reachable by a browser-side role.
-do $
+do $$
 declare
   v_fn regprocedure;
 begin
@@ -51,7 +51,7 @@ begin
       raise exception 'watch_runtime lost EXECUTE on %', v_fn;
     end if;
   end loop;
-end $;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- 1. SECRET is not a representable classification
