@@ -247,7 +247,10 @@ declare
   v_kind      text;
   v_locator   jsonb;
   v_resolved  text;
-  v_inserted  text;
+  -- A bare marker rather than the returned candidate_id: that name is also an
+  -- OUT column of this function, and `returning candidate_id` is ambiguous
+  -- between the two. `returning 1` references no column at all.
+  v_inserted  integer;
   v_reused    boolean := false;
 begin
   select * into v_source
@@ -290,7 +293,7 @@ begin
   )
   on conflict on constraint knowledge_candidates_source_id_content_hash_key
   do nothing
-  returning candidate_id into v_inserted;
+  returning 1 into v_inserted;
 
   -- Same source + same content hash is the same candidate. Re-learning a
   -- source must not multiply its candidates.

@@ -291,28 +291,36 @@ select public.approve_knowledge_candidate('knd_acme', 'krv_acme_001', 'knw_acme'
 select public.approve_knowledge_candidate('knd_globex', 'krv_globex_001', 'knw_globex');
 select public.approve_knowledge_candidate('knd_private', 'krv_private_001', 'knw_private');
 
+-- The query is deliberately NULL here, which returns every ACTIVE item the
+-- scope may see. A text query would make this test about full-text matching
+-- instead of about isolation -- and websearch_to_tsquery ANDs its terms, so a
+-- multi-word query matches nothing, array_agg returns NULL, and every
+-- `NULL @> array[...]` is NULL rather than false. The whole section would then
+-- pass without proving anything. coalesce below keeps that failure mode closed.
 do $$
 declare
   v_ids text[];
 begin
   -- GLOBAL sees only GLOBAL.
-  select array_agg(knowledge_id order by knowledge_id) into v_ids
+  select coalesce(array_agg(knowledge_id order by knowledge_id), '{}') into v_ids
   from public.search_knowledge_items_scoped(
-    'webhook signature retry policy', 'GLOBAL_VORQUEL', 'GLOBAL', null, 50);
+    null::text, 'GLOBAL_VORQUEL', 'GLOBAL', null, 50);
+  if not (v_ids @> array['knw_pdf_retry']) then
+    raise exception 'GLOBAL retrieval returned nothing; the test would be vacuous';
+  end if;
   if v_ids @> array['knw_acme'] or v_ids @> array['knw_globex']
      or v_ids @> array['knw_private'] then
     raise exception 'GLOBAL retrieval returned scoped knowledge: %', v_ids;
   end if;
 
   -- CLIENT acme sees GLOBAL + acme.
-  select array_agg(knowledge_id order by knowledge_id) into v_ids
-  from public.search_knowledge_items_scoped(
-    'webhook signature retry policy', 'CLIENT', 'acme', null, 50);
+  select coalesce(array_agg(knowledge_id order by knowledge_id), '{}') into v_ids
+  from public.search_knowledge_items_scoped(null::text, 'CLIENT', 'acme', null, 50);
   if not (v_ids @> array['knw_acme']) then
-    raise exception 'acme cannot see its own knowledge';
+    raise exception 'acme cannot see its own knowledge: %', v_ids;
   end if;
   if not (v_ids @> array['knw_pdf_retry']) then
-    raise exception 'acme cannot see GLOBAL knowledge';
+    raise exception 'acme cannot see GLOBAL knowledge: %', v_ids;
   end if;
 
   -- ...and never another client, or a private test scope.
@@ -324,11 +332,20 @@ begin
   end if;
 
   -- Symmetric check, so the rule is not accidentally one-directional.
-  select array_agg(knowledge_id order by knowledge_id) into v_ids
-  from public.search_knowledge_items_scoped(
-    'webhook signature retry policy', 'CLIENT', 'globex', null, 50);
+  select coalesce(array_agg(knowledge_id order by knowledge_id), '{}') into v_ids
+  from public.search_knowledge_items_scoped(null::text, 'CLIENT', 'globex', null, 50);
+  if not (v_ids @> array['knw_globex']) then
+    raise exception 'globex cannot see its own knowledge: %', v_ids;
+  end if;
   if v_ids @> array['knw_acme'] then
     raise exception 'CLIENT ISOLATION BROKEN: globex retrieved acme knowledge';
+  end if;
+
+  -- PRIVATE_TEST is not a backdoor into client scopes either.
+  select coalesce(array_agg(knowledge_id order by knowledge_id), '{}') into v_ids
+  from public.search_knowledge_items_scoped(null::text, 'PRIVATE_TEST', 'lab', null, 50);
+  if v_ids @> array['knw_acme'] or v_ids @> array['knw_globex'] then
+    raise exception 'PRIVATE_TEST retrieved client knowledge: %', v_ids;
   end if;
 end $$;
 
