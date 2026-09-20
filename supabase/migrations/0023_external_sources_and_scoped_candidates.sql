@@ -369,8 +369,20 @@ $fn$;
 -- ---------------------------------------------------------------------------
 -- 5. Approval must carry scope, classification and the generic locator
 -- ---------------------------------------------------------------------------
--- Replaces the 0016/0017 body. Without this, 0021's locator columns are
+-- Replaces the 0016/0017/0018 body. Without this, 0021's locator columns are
 -- dropped exactly when a candidate becomes knowledge.
+--
+-- It also repairs a second, older break. 0020 added valid_from, backfilled the
+-- existing rows and made the column NOT NULL -- but gave it no default and did
+-- not teach the approval path to set it. Every approval attempted since 0020
+-- therefore fails on a not-null violation. No CI job in this repository applied
+-- a migration until now, which is why it stayed invisible.
+--
+-- The default is set on the column as well as in the function below, so any
+-- other writer is covered too rather than only this one path.
+
+alter table vorquel_knowledge.knowledge_items
+  alter column valid_from set default now();
 
 create or replace function public.approve_knowledge_candidate(
   p_candidate_id text,
@@ -431,13 +443,16 @@ begin
     knowledge_id, candidate_id, source_id, knowledge_type, domain,
     title, summary, epistemic_status, content_hash,
     data_trust_class, instruction_authority,
-    scope_type, scope_id, data_classification
+    scope_type, scope_id, data_classification,
+    valid_from
   ) values (
     p_knowledge_id, v_candidate.candidate_id, v_candidate.source_id,
     v_candidate.knowledge_type, v_candidate.domain, v_candidate.title,
     v_candidate.summary, v_candidate.epistemic_status, v_candidate.content_hash,
     'UNTRUSTED_DERIVED', 'NONE',
-    v_candidate.scope_type, v_candidate.scope_id, v_candidate.data_classification
+    v_candidate.scope_type, v_candidate.scope_id, v_candidate.data_classification,
+    -- Knowledge is valid from the moment a human approved it, which is now.
+    now()
   );
 
   insert into vorquel_knowledge.knowledge_sources (

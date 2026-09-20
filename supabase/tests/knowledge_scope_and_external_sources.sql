@@ -245,6 +245,35 @@ begin
   end if;
 end $$;
 
+-- 0020 made valid_from NOT NULL without a default and without updating the
+-- approval path, so every approval after it failed on a not-null violation.
+-- Nothing applied a migration in CI, so it stayed invisible until now.
+do $$
+declare
+  v_from timestamptz;
+  v_state text;
+begin
+  select valid_from, lifecycle_state into v_from, v_state
+  from vorquel_knowledge.knowledge_items
+  where knowledge_id = 'knw_pdf_retry';
+
+  if v_from is null then
+    raise exception 'approved knowledge has no validity start';
+  end if;
+  if v_state <> 'ACTIVE' then
+    raise exception 'approved knowledge did not land ACTIVE, got %', v_state;
+  end if;
+
+  -- The column default covers any writer that is not this function.
+  if (select column_default is null
+      from information_schema.columns
+      where table_schema = 'vorquel_knowledge'
+        and table_name = 'knowledge_items'
+        and column_name = 'valid_from') then
+    raise exception 'valid_from still has no default; another writer can break';
+  end if;
+end $$;
+
 -- ---------------------------------------------------------------------------
 -- 4. Scope isolation
 -- ---------------------------------------------------------------------------
