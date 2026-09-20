@@ -20,6 +20,9 @@ EXPECTED_TOOLS = {
     "create_export",
     "list_artifacts",
     "get_artifact",
+    # V1.3 read-only visual context extension.
+    "get_visual_context_at",
+    "get_visual_context_range",
     # V1.2 reviewed-knowledge + lifecycle/synthesis extension.
     "propose_knowledge_candidate",
     "list_knowledge_candidates",
@@ -67,6 +70,8 @@ class McpContractTests(unittest.IsolatedAsyncioTestCase):
             result = await client.list_tools()
             names = {tool.name for tool in result.tools}
         self.assertEqual(names, EXPECTED_TOOLS)
+        self.assertEqual(len(names), 24)
+        self.assertNotIn("get_frame", names)
 
     async def test_no_tool_accepts_a_path_url_command_or_secret(self) -> None:
         """The surface is bounded by what does not exist.
