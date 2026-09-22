@@ -93,6 +93,12 @@ Caveat recorded honestly: these fixtures are synthetic renders with clean text.
 Real video frames carry compression artifacts, scaling and motion blur.
 Accuracy on real workshop footage is unverified until the acceptance test runs.
 
+Follow-up (2026-09-21): real OCR and screen-observation evidence was exercised
+through the subsequently authorized Visual Context MCP V1.3 surface. The
+result is recorded in `docs/acceptance/real-visual-context-e2e-v1.md`. This
+follow-up does not revive the five-tool proposal or `get_frame` from this
+historical ADR.
+
 Model artifacts are pinned: the upstream config fixes each model URL to tag
 `v3.9.2` and declares a SHA256 per model, and `Global.model_root_dir` allows a
 local model directory. This matches the pinning discipline already applied to
