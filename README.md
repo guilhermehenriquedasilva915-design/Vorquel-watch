@@ -4,9 +4,8 @@ Private implementation repository for Vorquel Watch / Content Brain.
 
 Give it a local workshop recording and it transcribes what was said while the
 local worker can also build a timestamped screen/OCR track. Claude Desktop uses
-the frozen V1 MCP contract plus a versioned V1.1 reviewed-knowledge extension
-for proposing, approving and retrieving persistent learning. URL ingest remains
-deferred.
+the versioned MCP V1.3 surface for bounded transcript, reviewed-knowledge and
+safe visual-context retrieval. URL ingest remains deferred.
 
 > "When he says this is the flow that receives the lead, the screen shows an n8n
 > workflow containing Webhook, Normalize Lead, Supabase and Follow-up."
@@ -19,18 +18,26 @@ deferred.
 | Transcription (FAST) | Implemented, validated end to end on a 35.3 s real video |
 | Screen tracking, change detection, dedupe | Implemented, validated on the same real video |
 | OCR | Implemented, validated on the same real video |
-| Frame retrieval by timestamp | Implemented and measured |
+| Internal frame retrieval by timestamp | Implemented and measured; no public `get_frame` tool |
+| Visual Review Core V1 | Completed |
+| Visual Review Pack V1 | Completed |
 | Combined speech + screen context | Implemented |
-| MCP surface | 14 frozen V1 tools + 5 versioned reviewed-knowledge V1.1 tools, contract-tested |
-| Reviewed knowledge store | Candidate → human review → approved item → FTS retrieval validated live with rollback |
+| Visual Context MCP V1 | Completed; MCP V1.3 exposes exactly 24 tools and no `get_frame` |
+| Real Visual Context E2E V1 | PASS on a processed 1,629,994 ms real video |
+| Analyze-to-Candidate Draft V1 | Bounded local heuristic, ephemeral drafts and explicit proposal validated on real evidence |
+| Human review UI | Draft evidence/edit/discard/propose and separate candidate approve/reject flow implemented |
+| Reviewed knowledge store | Candidate → human review → ACTIVE item → FTS/synthesis validated live |
 | Security and database integrity | Complete, verified against the live project |
 | Long-video resume | Job-level recovery only; no mid-job resume |
-| STANDARD / SPEAKERS / local UI | Not implemented |
+| STANDARD / SPEAKERS | Not implemented |
 
 A 35.3 second real video has been processed through ingest, transcription,
-screen sampling, OCR and persistence. This proves the pipeline executes end to
-end; it does not yet prove semantic quality, long-video robustness or workshop-
-scale throughput.
+screen sampling, OCR and persistence. Visual Context MCP V1.3 was also accepted
+end to end against an already processed 1,629,994 ms real video, including
+bounded point/range queries and deterministic replay. This proves those paths
+execute end to end; it does not establish production readiness, semantic
+quality or workshop-scale throughput. Scene-aware range performance on larger
+ranges remains an open follow-up.
 
 ### Data flow
 
@@ -40,7 +47,7 @@ local file ─────> Source Guard ─> content-addressed local storage
                                            ├─> Faster-Whisper ─> transcript segments
                                            └─> sample / change detect / OCR ─> screen observations
                                                            │
-                           Claude Desktop ─> local MCP V1/V1.1 ─> bounded transcript/provenance data
+                           Claude Desktop ─> local MCP V1.3 ─> bounded transcript/provenance data
                                                         │
                                                         └─> reviewed knowledge candidates/items
 ```
@@ -92,6 +99,8 @@ Then ask Claude about that `source_id`. The questions it can answer:
 | Save only after explicit approval | `approve_knowledge_candidate` |
 | Reject a candidate | `reject_knowledge_candidate` |
 | Recall approved knowledge later | `search_knowledge` |
+| Inspect existing visual and spoken context at a timestamp | `get_visual_context_at` |
+| Inspect bounded visual and spoken context over a range | `get_visual_context_range` |
 
 The worker persists screen/OCR observations. The V1.1 knowledge extension is
 additive and versioned by ADR 0004; media-derived text remains untrusted and
@@ -122,15 +131,19 @@ carries the widest legacy codec surface for the least value here.
 .\.venv\Scripts\python.exe scripts\security\check_repo.py
 ```
 
-167 tests. Dependencies are locked with hashes — read `docs/dependencies.md`
+The current isolated suite has 270 passing tests, 145 passing subtests and 1
+expected skip.
+Dependencies are locked with hashes — read `docs/dependencies.md`
 before touching `pyproject.toml`.
 
 ## Limitations
 
-- One short real recording has been processed, but semantic ASR/OCR quality and
-  long-video/workshop robustness are not yet validated.
-- OCR was measured on synthetic renders with clean text. Real frames carry
-  compression artifacts and scaling that those fixtures do not.
+- Real short-video processing and long-video Visual Context retrieval have been
+  exercised, but semantic ASR/OCR quality and workshop-scale robustness are
+  not yet validated.
+- A real two-minute scene-aware range completed in 135,317.406 ms on the
+  acceptance machine. Treat this as a performance follow-up requiring future
+  profiling, not as an authorization to change current budgets.
 - A reclaimed job restarts from the beginning; there is no mid-job resume, so a
   long recording that fails late repeats its work.
 - Media parsing is isolated in a separate process, which is not a sandbox.
@@ -150,6 +163,10 @@ before touching `pyproject.toml`.
 | `docs/adr/0002-screen-pipeline-and-mcp-extension.md` | Historical screen/MCP proposal; partly superseded |
 | `docs/adr/0003-restore-frozen-mcp-and-defer-url-ingest.md` | Restores the frozen V1 boundary |
 | `docs/adr/0004-reviewed-knowledge-mcp-extension.md` | Additive V1.1 reviewed learning contract |
+| `docs/adr/0006-visual-review-core-v1.md` | Deterministic bounded frame-selection core |
+| `docs/adr/0007-visual-review-pack-v1.md` | Read-only multimodal evidence compositor |
+| `docs/adr/0008-visual-context-mcp-v1.md` | Read-only Visual Context MCP V1.3 contract |
+| `docs/acceptance/real-visual-context-e2e-v1.md` | Real Visual Context E2E V1 evidence and verdict |
 | `docs/media-sandbox.md` | What media isolation guarantees, and what it does not |
 | `docs/dependencies.md` | Lock file, audit, SBOM, media stack CVE position |
 | `docs/threat-model/v1.md` | Threats and the status of each control |
