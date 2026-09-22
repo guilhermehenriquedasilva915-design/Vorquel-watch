@@ -30,18 +30,23 @@ class VorquelWatchUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Vorquel Watch")
-        self.root.geometry("1080x760")
-        self.root.minsize(900, 650)
+        self.root.geometry("1180x900")
+        self.root.minsize(980, 760)
 
         self.selected_file: Path | None = None
         self.pending_by_id: dict[str, dict[str, Any]] = {}
         self.checked_candidate_ids: set[str] = set()
         self.knowledge_results_by_id: dict[str, dict[str, Any]] = {}
+        self.drafts_by_id: dict[str, dict[str, Any]] = {}
 
         self.file_var = tk.StringVar(value="Nenhum arquivo selecionado")
         self.status_var = tk.StringVar(value="Pronto")
         self.vault_var = tk.StringVar(value=str(DEFAULT_VAULT))
         self.search_var = tk.StringVar()
+        self.draft_source_var = tk.StringVar()
+        self.draft_domain_var = tk.StringVar(value="general")
+        self.draft_start_var = tk.StringVar(value="0")
+        self.draft_end_var = tk.StringVar()
         self._busy = False
 
         self._build()
@@ -89,6 +94,69 @@ class VorquelWatchUI:
         self.progress = ttk.Progressbar(analysis, mode="indeterminate")
         self.progress.pack(fill="x", pady=(10, 4))
         ttk.Label(analysis, textvariable=self.status_var).pack(anchor="w")
+
+        drafts = ttk.LabelFrame(
+            shell, text="2. Analyze - drafts nao persistidos", padding=10
+        )
+        drafts.pack(fill="both", expand=True, pady=(0, 10))
+
+        draft_input = ttk.Frame(drafts)
+        draft_input.pack(fill="x", pady=(0, 8))
+        ttk.Label(draft_input, text="Source ID:").pack(side="left")
+        ttk.Entry(draft_input, textvariable=self.draft_source_var, width=38).pack(
+            side="left", padx=(4, 8)
+        )
+        ttk.Label(draft_input, text="Dominio:").pack(side="left")
+        ttk.Entry(draft_input, textvariable=self.draft_domain_var, width=16).pack(
+            side="left", padx=(4, 8)
+        )
+        ttk.Label(draft_input, text="Inicio ms:").pack(side="left")
+        ttk.Entry(draft_input, textvariable=self.draft_start_var, width=9).pack(
+            side="left", padx=(4, 8)
+        )
+        ttk.Label(draft_input, text="Fim ms:").pack(side="left")
+        ttk.Entry(draft_input, textvariable=self.draft_end_var, width=9).pack(
+            side="left", padx=(4, 8)
+        )
+        ttk.Button(
+            draft_input, text="Gerar drafts", command=self.analyze_source_drafts
+        ).pack(side="left")
+
+        self.drafts = ttk.Treeview(
+            drafts,
+            columns=("status", "type", "domain", "title", "evidence"),
+            show="headings",
+            height=5,
+            selectmode="browse",
+        )
+        for key, label, width in (
+            ("status", "Epistemico", 105),
+            ("type", "Tipo", 90),
+            ("domain", "Dominio", 110),
+            ("title", "Draft", 470),
+            ("evidence", "Evidencias", 80),
+        ):
+            self.drafts.heading(key, text=label)
+            self.drafts.column(key, width=width, stretch=key == "title")
+        self.drafts.pack(fill="both", expand=True)
+        self.drafts.bind("<Double-1>", self.show_draft_details)
+
+        draft_actions = ttk.Frame(drafts)
+        draft_actions.pack(fill="x", pady=(8, 0))
+        ttk.Button(
+            draft_actions, text="Ver evidencias", command=self.show_draft_details
+        ).pack(side="left")
+        ttk.Button(
+            draft_actions, text="Editar", command=self.edit_selected_draft
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            draft_actions, text="Descartar", command=self.discard_selected_draft
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            draft_actions,
+            text="Enviar como candidate PENDING",
+            command=self.propose_selected_draft,
+        ).pack(side="left", padx=(8, 0))
 
         brain = ttk.LabelFrame(shell, text="2. Brain — candidates pendentes", padding=10)
         brain.pack(fill="both", expand=True, pady=(0, 10))
@@ -227,6 +295,206 @@ class VorquelWatchUI:
             on_success=self._populate_candidates,
             quiet=True,
         )
+
+    def analyze_source_drafts(self) -> None:
+        source_id = self.draft_source_var.get().strip()
+        domain = self.draft_domain_var.get().strip()
+        if not source_id or not domain:
+            messagebox.showwarning(
+                "Vorquel Watch", "Informe source_id e dominio para Analyze."
+            )
+            return
+        try:
+            start_ms = int(self.draft_start_var.get().strip() or "0")
+            end_text = self.draft_end_var.get().strip()
+            end_ms = int(end_text) if end_text else None
+        except ValueError:
+            messagebox.showwarning(
+                "Vorquel Watch", "Inicio/fim devem ser milissegundos inteiros."
+            )
+            return
+        args = [
+            "brain",
+            "analyze-drafts",
+            "--source-id",
+            source_id,
+            "--domain",
+            domain,
+            "--start-ms",
+            str(start_ms),
+        ]
+        if end_ms is not None:
+            args.extend(["--end-ms", str(end_ms)])
+        self._run_async(
+            args,
+            status="Selecionando evidencia e gerando drafts locais...",
+            on_success=self._populate_drafts,
+        )
+
+    def _populate_drafts(self, data: dict[str, Any]) -> None:
+        for item in self.drafts.get_children():
+            self.drafts.delete(item)
+        self.drafts_by_id = {
+            str(draft["draft_id"]): dict(draft)
+            for draft in data.get("drafts") or []
+            if isinstance(draft, dict) and draft.get("draft_id")
+        }
+        for draft_id, draft in self.drafts_by_id.items():
+            self.drafts.insert(
+                "",
+                "end",
+                iid=draft_id,
+                values=(
+                    draft.get("epistemic_status") or "",
+                    draft.get("knowledge_type") or "",
+                    draft.get("domain") or "",
+                    draft.get("title") or "",
+                    len(draft.get("evidence_refs") or []),
+                ),
+            )
+        self._show_json(
+            data,
+            f"Analyze concluido: {len(self.drafts_by_id)} draft(s), nenhum persistido.",
+        )
+
+    def _selected_draft(self) -> dict[str, Any] | None:
+        selection = self.drafts.selection()
+        if not selection:
+            messagebox.showwarning("Vorquel Watch", "Selecione um draft.")
+            return None
+        return self.drafts_by_id.get(str(selection[0]))
+
+    def show_draft_details(self, _event=None) -> None:
+        draft = self._selected_draft()
+        if draft is not None:
+            self._show_json({"draft": draft}, "Draft efemero; evidencias exibidas.")
+
+    def discard_selected_draft(self) -> None:
+        selection = self.drafts.selection()
+        if not selection:
+            messagebox.showwarning("Vorquel Watch", "Selecione um draft.")
+            return
+        draft_id = str(selection[0])
+        self.drafts_by_id.pop(draft_id, None)
+        self.drafts.delete(draft_id)
+        self.status_var.set("Draft descartado sem persistencia.")
+
+    def edit_selected_draft(self) -> None:
+        draft = self._selected_draft()
+        if draft is None:
+            return
+        edited = self._edit_draft_fields(draft)
+        if edited is None:
+            return
+        edited.pop("draft_id", None)
+        from vorquel_watch.analyze_drafts import DraftCandidate
+
+        try:
+            validated = DraftCandidate.from_dict(edited).as_dict()
+        except ValueError as exc:
+            messagebox.showerror("Vorquel Watch", str(exc))
+            return
+        old_id = str(draft["draft_id"])
+        new_id = str(validated["draft_id"])
+        self.drafts_by_id.pop(old_id, None)
+        self.drafts.delete(old_id)
+        self.drafts_by_id[new_id] = validated
+        self.drafts.insert(
+            "",
+            "end",
+            iid=new_id,
+            values=(
+                validated["epistemic_status"],
+                validated["knowledge_type"],
+                validated["domain"],
+                validated["title"],
+                len(validated["evidence_refs"]),
+            ),
+        )
+        self.status_var.set("Draft editado localmente; ainda nao persistido.")
+
+    def propose_selected_draft(self) -> None:
+        draft = self._selected_draft()
+        if draft is None:
+            return
+        if not messagebox.askyesno(
+            "Enviar draft",
+            "Criar um candidate PENDING com este draft revisado?\n\n"
+            "Isso nao aprova conhecimento nem concede autoridade de instrucao.",
+        ):
+            return
+        self._run_async(
+            [
+                "brain",
+                "propose-draft",
+                "--draft-json",
+                json.dumps(draft, ensure_ascii=False, separators=(",", ":")),
+            ],
+            status="Enviando draft revisado como candidate PENDING...",
+            on_success=lambda data: self._after_draft_proposed(
+                data, str(draft["draft_id"])
+            ),
+        )
+
+    def _after_draft_proposed(self, data: dict[str, Any], draft_id: str) -> None:
+        self.drafts_by_id.pop(draft_id, None)
+        if self.drafts.exists(draft_id):
+            self.drafts.delete(draft_id)
+        self._show_json(data, "Candidate PENDING criado por acao humana explicita.")
+        self.refresh_candidates()
+
+    def _edit_draft_fields(
+        self, draft: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Editar draft")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.geometry("760x520")
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+        values = {
+            key: tk.StringVar(value=str(draft.get(key) or ""))
+            for key in ("title", "knowledge_type", "epistemic_status", "domain")
+        }
+        for row, (key, label) in enumerate(
+            (
+                ("title", "Titulo"),
+                ("knowledge_type", "Tipo"),
+                ("epistemic_status", "Status epistemico"),
+                ("domain", "Dominio"),
+            )
+        ):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=4)
+            ttk.Entry(frame, textvariable=values[key]).grid(
+                row=row, column=1, sticky="ew", pady=4
+            )
+        ttk.Label(frame, text="Resumo").grid(row=4, column=0, sticky="nw", pady=4)
+        summary = tk.Text(frame, height=12, wrap="word")
+        summary.insert("1.0", str(draft.get("summary") or ""))
+        summary.grid(row=4, column=1, sticky="nsew", pady=4)
+        frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(4, weight=1)
+
+        result: dict[str, dict[str, Any] | None] = {"value": None}
+
+        def accept() -> None:
+            edited = dict(draft)
+            for key, variable in values.items():
+                edited[key] = variable.get().strip()
+            edited["summary"] = summary.get("1.0", "end").strip()
+            result["value"] = edited
+            dialog.destroy()
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=5, column=1, sticky="e", pady=(10, 0))
+        ttk.Button(buttons, text="Cancelar", command=dialog.destroy).pack(side="right")
+        ttk.Button(buttons, text="Salvar draft", command=accept).pack(
+            side="right", padx=(0, 8)
+        )
+        dialog.wait_window()
+        return result["value"]
 
     def toggle_candidate_check(self, event) -> None:
         row_id = self.candidates.identify_row(event.y)
@@ -557,6 +825,9 @@ class VorquelWatchUI:
         os.startfile(str(vault))  # type: ignore[attr-defined]
 
     def _after_analysis(self, data: dict[str, Any]) -> None:
+        source = data.get("source") or {}
+        if source.get("source_id"):
+            self.draft_source_var.set(str(source["source_id"]))
         self._show_json(data, "Análise concluída.")
         self.refresh_candidates()
 

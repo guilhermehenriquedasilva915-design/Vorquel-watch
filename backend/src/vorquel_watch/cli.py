@@ -9,6 +9,11 @@ import shutil
 import sys
 
 from vorquel_watch import credentials
+from vorquel_watch.analyze_drafts import (
+    AnalyzeToCandidateService,
+    DraftCandidate,
+    propose_draft,
+)
 from vorquel_watch.config import SECRET_ENV_VAR, Settings, default_data_dir
 from vorquel_watch.db import WatchRepository
 from vorquel_watch.ingest import ingest_local_file
@@ -224,6 +229,48 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 def _brain_writer() -> KnowledgeWriter:
     settings = Settings.from_env()
     return KnowledgeWriter(WatchRepository(settings))
+
+
+def _draft_service() -> AnalyzeToCandidateService:
+    settings = Settings.from_env()
+    return AnalyzeToCandidateService(WatchRepository(settings), settings)
+
+
+def cmd_brain_analyze_drafts(args: argparse.Namespace) -> int:
+    try:
+        result = _draft_service().analyze_source(
+            source_id=args.source_id,
+            domain=args.domain,
+            start_ms=args.start_ms,
+            end_ms=args.end_ms,
+        )
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    except Exception:
+        print(
+            json.dumps(
+                {"error": "Draft analysis could not be completed safely."},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_brain_propose_draft(args: argparse.Namespace) -> int:
+    try:
+        payload = json.loads(args.draft_json)
+        draft = DraftCandidate.from_dict(payload)
+        candidate = propose_draft(_brain_writer(), draft)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    print(json.dumps({"candidate": candidate}, ensure_ascii=False, indent=2))
+    return 0
 
 
 
@@ -549,6 +596,23 @@ def build_parser() -> argparse.ArgumentParser:
     propose.add_argument("--segment-id")
     propose.add_argument("--screen-observation-id")
     propose.set_defaults(func=cmd_brain_propose)
+
+    analyze_drafts = brain_sub.add_parser(
+        "analyze-drafts",
+        help="Create bounded ephemeral drafts from an already processed source.",
+    )
+    analyze_drafts.add_argument("--source-id", required=True)
+    analyze_drafts.add_argument("--domain", required=True)
+    analyze_drafts.add_argument("--start-ms", type=int, default=0)
+    analyze_drafts.add_argument("--end-ms", type=int)
+    analyze_drafts.set_defaults(func=cmd_brain_analyze_drafts)
+
+    propose_draft_parser = brain_sub.add_parser(
+        "propose-draft",
+        help="Explicitly submit one reviewed draft as a PENDING candidate.",
+    )
+    propose_draft_parser.add_argument("--draft-json", required=True)
+    propose_draft_parser.set_defaults(func=cmd_brain_propose_draft)
 
     list_candidates = brain_sub.add_parser(
         "list",
