@@ -74,6 +74,44 @@ jobs:
       - name: Dependency check
         run: python -m pip check
 
+  knowledge-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Bootstrap Supabase roles
+        run: psql "$DATABASE_URL" -f supabase/tests/bootstrap.sql
+
+      - name: Apply migrations from zero
+        shell: bash
+        run: |
+          set -euo pipefail
+          for migration in $(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
+            echo "Applying ${migration}"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "${migration}"
+          done
+
+      - name: Knowledge approval integrity
+        run: psql "$DATABASE_URL" -f supabase/tests/knowledge_approval_integrity.sql
+
   secrets:
     runs-on: ubuntu-latest
     steps:
