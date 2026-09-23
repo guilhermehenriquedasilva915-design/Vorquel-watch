@@ -2,12 +2,48 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 from vorquel_watch.config import Settings
 from vorquel_watch.db import WatchRepository
 from vorquel_watch.envelope import envelope, safe_error
 from vorquel_watch.exports import create_export
+from vorquel_watch.ids import validate_id
+from vorquel_watch.knowledge import KnowledgeProvenance, KnowledgeWriter
+from vorquel_watch.local_storage import IntegrityError, LocalStorage
+from vorquel_watch.visual_review import SelectionMode, extract_frames
+from vorquel_watch.visual_review_pack import (
+    DATA_TRUST_CLASS,
+    INSTRUCTION_AUTHORITY,
+    build_visual_review_pack,
+    build_visual_review_packs,
+)
+
+
+MAX_SEARCH_SOURCE_IDS = 25
+VISUAL_CONTEXT_MAX_RANGE_MS = 10 * 60 * 1000
+VISUAL_CONTEXT_DEFAULT_MAX_PACKS = 20
+VISUAL_CONTEXT_MAX_PACKS = 50
+VISUAL_CONTEXT_POINT_RADIUS_MS = 500
+
+
+def _invalid(tool: str, exc: ValueError) -> dict[str, Any]:
+    """Uniform rejection for a malformed argument.
+
+    validate_id never puts the supplied value in its message, so this is safe
+    to reflect back to the caller.
+    """
+    return safe_error(tool, "INVALID_ARGUMENT", str(exc))
+
+
+def _visual_mode(value: object) -> SelectionMode | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return SelectionMode(value.strip().lower())
+    except ValueError:
+        return None
 
 
 class WatchService:
@@ -31,6 +67,13 @@ class WatchService:
             "whisper_model": self.settings.whisper_model,
             "device": self.settings.whisper_device,
             "compute_type": self.settings.whisper_compute_type,
+            "transcription_chunk_ms": self.settings.transcription_chunk_ms,
+            "transcription_overlap_ms": self.settings.transcription_overlap_ms,
+            "screen_enabled": self.settings.screen_enabled,
+            "screen_interval_ms": self.settings.screen_interval_ms,
+            "screen_change_threshold": self.settings.screen_change_threshold,
+            "screen_max_observations": self.settings.screen_max_observations,
+            "screen_max_samples": self.settings.screen_max_samples,
             "pipeline_version": self.settings.pipeline_version,
         }
         raw = json.dumps(
@@ -40,6 +83,18 @@ class WatchService:
         ).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()
 
+    def _succeeded_job_for(self, transcript_id: str) -> tuple[dict[str, Any] | None, bool]:
+        """Return (transcript_meta, job_succeeded).
+
+        INT-04. A transcript produced by a job that failed, was cancelled or is
+        still running is not a final result and must not be served as one.
+        """
+        meta = self.repo.get_transcript_meta(transcript_id)
+        if not meta:
+            return None, False
+        job = self.repo.get_job(meta.get("job_id"))
+        return meta, bool(job and job.get("status") == "SUCCEEDED")
+
     def get_capabilities(self) -> dict[str, Any]:
         return envelope(
             "get_capabilities",
@@ -48,10 +103,26 @@ class WatchService:
                 "release": "0.1.0-alpha",
                 "schema_version": "1.0",
                 "pipeline_version": self.settings.pipeline_version,
+                "mcp": {"version": "1.3", "tool_count": 24},
                 "supported_modes": ["FAST"],
                 "planned_modes": ["STANDARD", "SPEAKERS"],
                 "exports": ["TXT", "MARKDOWN", "JSON", "SRT", "VTT"],
                 "search": "POSTGRES_FTS",
+                "screen": {
+                    "enabled": bool(getattr(self.settings, "screen_enabled", False)),
+                    "applies_to": "sources with a video track",
+                    "produces": ["screen_observations", "ocr_text", "frames"],
+                    "search": "POSTGRES_FTS",
+                    "mcp_dedicated_tools": True,
+                    "exposure": "read-only visual context metadata in MCP V1.3",
+                    "tools": [
+                        "get_visual_context_at",
+                        "get_visual_context_range",
+                    ],
+                    "frame_bytes_exposed": False,
+                    "max_range_ms": VISUAL_CONTEXT_MAX_RANGE_MS,
+                    "max_packs": VISUAL_CONTEXT_MAX_PACKS,
+                },
                 "ingest": {
                     "local_cli": True,
                     "mcp_path_input": False,
@@ -61,6 +132,18 @@ class WatchService:
                     "local": True,
                     "raw_media_cloud_upload": False,
                     "resume_running_jobs": False,
+                },
+                "knowledge": {
+                    "extension": "V1.2",
+                    "candidate_review_required": True,
+                    "human_approval_required": True,
+                    "retrieval": "POSTGRES_FTS",
+                    "lifecycle": ["ACTIVE", "SUPERSEDED", "WITHDRAWN"],
+                    "correction": "explicit_supersession",
+                    "withdrawal": "explicit_human_intent",
+                    "synthesis": "EXTRACTIVE_V1_WITH_PROVENANCE_AND_GAPS",
+                    "external_llm_calls": False,
+                    "instruction_authority": "NONE",
                 },
             },
             contains_untrusted_content=False,
@@ -89,6 +172,11 @@ class WatchService:
             return safe_error("list_sources", "INVALID_ARGUMENT", str(exc))
 
     def get_source(self, source_id: str) -> dict[str, Any]:
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("get_source", exc)
+
         row = self.repo.get_source(source_id)
         if not row:
             return safe_error("get_source", "NOT_FOUND", "Source not found.")
@@ -104,7 +192,12 @@ class WatchService:
         mode: str = "FAST",
         language_hint: str | None = None,
     ) -> dict[str, Any]:
-        normalized = mode.strip().upper()
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("start_analysis", exc)
+
+        normalized = mode.strip().upper() if isinstance(mode, str) else ""
         clean_language = language_hint.strip().lower() if language_hint else None
         if clean_language and (
             len(clean_language) > 16
@@ -143,12 +236,22 @@ class WatchService:
             return safe_error("start_analysis", "INVALID_SOURCE", str(exc))
 
     def get_job(self, job_id: str) -> dict[str, Any]:
+        try:
+            job_id = validate_id(job_id, "job_")
+        except ValueError as exc:
+            return _invalid("get_job", exc)
+
         row = self.repo.get_job(job_id)
         if not row:
             return safe_error("get_job", "NOT_FOUND", "Job not found.")
         return envelope("get_job", row, contains_untrusted_content=False)
 
     def cancel_job(self, job_id: str) -> dict[str, Any]:
+        try:
+            job_id = validate_id(job_id, "job_")
+        except ValueError as exc:
+            return _invalid("cancel_job", exc)
+
         row = self.repo.cancel_job(job_id)
         if not row:
             return safe_error("cancel_job", "NOT_FOUND", "Job not found.")
@@ -163,12 +266,23 @@ class WatchService:
         limit_segments: int = 100,
         include_words: bool = False,
     ) -> dict[str, Any]:
-        meta = self.repo.get_transcript_meta(transcript_id)
+        try:
+            transcript_id = validate_id(transcript_id, "trn_")
+        except ValueError as exc:
+            return _invalid("get_transcript", exc)
+
+        meta, succeeded = self._succeeded_job_for(transcript_id)
         if not meta:
             return safe_error(
                 "get_transcript",
                 "NOT_FOUND",
                 "Transcript not found.",
+            )
+        if not succeeded:
+            return safe_error(
+                "get_transcript",
+                "TRANSCRIPT_NOT_FINAL",
+                "This transcript belongs to a job that has not succeeded.",
             )
         try:
             segments = self.repo.get_transcript_segments(
@@ -196,6 +310,17 @@ class WatchService:
         limit: int = 20,
     ) -> dict[str, Any]:
         try:
+            if not isinstance(source_ids, list) or not source_ids:
+                raise ValueError("source_ids must be a non-empty list")
+            if len(source_ids) > MAX_SEARCH_SOURCE_IDS:
+                raise ValueError(
+                    f"source_ids must contain at most {MAX_SEARCH_SOURCE_IDS} ids"
+                )
+            source_ids = [validate_id(value, "src_") for value in source_ids]
+        except ValueError as exc:
+            return _invalid("search_transcript", exc)
+
+        try:
             rows = self.repo.search_segments(
                 query=query,
                 source_ids=source_ids,
@@ -222,6 +347,11 @@ class WatchService:
         context_after: int = 2,
         include_words: bool = False,
     ) -> dict[str, Any]:
+        try:
+            segment_id = validate_id(segment_id, "seg_")
+        except ValueError as exc:
+            return _invalid("get_segment", exc)
+
         data = self.repo.get_segment(
             segment_id,
             context_before=context_before,
@@ -230,6 +360,17 @@ class WatchService:
         )
         if not data:
             return safe_error("get_segment", "NOT_FOUND", "Segment not found.")
+
+        # INT-04: a segment is only servable if its transcript is final.
+        segments = data.get("segments") or []
+        if segments:
+            _, succeeded = self._succeeded_job_for(segments[0]["transcript_id"])
+            if not succeeded:
+                return safe_error(
+                    "get_segment",
+                    "TRANSCRIPT_NOT_FINAL",
+                    "This segment belongs to a job that has not succeeded.",
+                )
         return envelope(
             "get_segment",
             data,
@@ -237,6 +378,11 @@ class WatchService:
         )
 
     def list_speakers(self, source_id: str) -> dict[str, Any]:
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("list_speakers", exc)
+
         return envelope(
             "list_speakers",
             {"items": self.repo.list_speakers(source_id)},
@@ -251,6 +397,11 @@ class WatchService:
         cursor: str | None = None,
         limit: int = 100,
     ) -> dict[str, Any]:
+        try:
+            speaker_id = validate_id(speaker_id, "spk_")
+        except ValueError as exc:
+            return _invalid("get_speaker_turns", exc)
+
         try:
             data = self.repo.get_speaker_turns(
                 speaker_id,
@@ -272,6 +423,26 @@ class WatchService:
         )
 
     def create_export(self, transcript_id: str, format: str) -> dict[str, Any]:
+        try:
+            transcript_id = validate_id(transcript_id, "trn_")
+        except ValueError as exc:
+            return _invalid("create_export", exc)
+
+        # INT-04: never export a transcript whose job did not succeed.
+        meta, succeeded = self._succeeded_job_for(transcript_id)
+        if not meta:
+            return safe_error(
+                "create_export",
+                "NOT_FOUND",
+                "Transcript not found.",
+            )
+        if not succeeded:
+            return safe_error(
+                "create_export",
+                "TRANSCRIPT_NOT_FINAL",
+                "This transcript belongs to a job that has not succeeded.",
+            )
+
         try:
             artifact = create_export(
                 self.repo,
@@ -296,6 +467,11 @@ class WatchService:
         source_id: str,
         artifact_type: str | None = None,
     ) -> dict[str, Any]:
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("list_artifacts", exc)
+
         return envelope(
             "list_artifacts",
             {
@@ -307,7 +483,648 @@ class WatchService:
             contains_untrusted_content=True,
         )
 
+    # ------------------------------------------------------------- knowledge
+
+    def propose_knowledge_candidate(
+        self,
+        *,
+        source_id: str,
+        knowledge_type: str,
+        domain: str,
+        title: str,
+        summary: str,
+        epistemic_status: str,
+        provenance: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            source_id = validate_id(source_id, "src_")
+            rows: list[KnowledgeProvenance] = []
+            for entry in provenance or []:
+                if not isinstance(entry, dict):
+                    raise ValueError("each provenance entry must be an object")
+                rows.append(
+                    KnowledgeProvenance(
+                        start_ms=entry.get("start_ms"),
+                        end_ms=entry.get("end_ms"),
+                        transcript_id=entry.get("transcript_id"),
+                        segment_id=entry.get("segment_id"),
+                        screen_observation_id=entry.get("screen_observation_id"),
+                    )
+                )
+            candidate = KnowledgeWriter(self.repo).propose(
+                source_id=source_id,
+                knowledge_type=knowledge_type,
+                domain=domain,
+                title=title,
+                summary=summary,
+                epistemic_status=epistemic_status,
+                provenance=rows,
+            )
+            return envelope(
+                "propose_knowledge_candidate",
+                {"candidate": candidate},
+                contains_untrusted_content=True,
+            )
+        except ValueError as exc:
+            return safe_error(
+                "propose_knowledge_candidate", "INVALID_ARGUMENT", str(exc)
+            )
+
+    def list_knowledge_candidates(
+        self,
+        *,
+        source_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        try:
+            items = KnowledgeWriter(self.repo).list_candidates(
+                source_id=source_id,
+                status=status,
+                limit=limit,
+            )
+            return envelope(
+                "list_knowledge_candidates",
+                {"items": items},
+                contains_untrusted_content=True,
+            )
+        except (TypeError, ValueError) as exc:
+            return safe_error(
+                "list_knowledge_candidates", "INVALID_ARGUMENT", str(exc)
+            )
+
+    def approve_knowledge_candidate(
+        self,
+        candidate_id: str,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            item = KnowledgeWriter(self.repo).approve(candidate_id, note=note)
+            return envelope(
+                "approve_knowledge_candidate",
+                {"knowledge_item": item},
+                contains_untrusted_content=True,
+            )
+        except ValueError as exc:
+            return safe_error(
+                "approve_knowledge_candidate", "INVALID_ARGUMENT", str(exc)
+            )
+
+    def reject_knowledge_candidate(
+        self,
+        candidate_id: str,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            candidate = KnowledgeWriter(self.repo).reject(candidate_id, note=note)
+            return envelope(
+                "reject_knowledge_candidate",
+                {"candidate": candidate},
+                contains_untrusted_content=True,
+            )
+        except ValueError as exc:
+            return safe_error(
+                "reject_knowledge_candidate", "INVALID_ARGUMENT", str(exc)
+            )
+
+    def withdraw_knowledge(
+        self,
+        knowledge_id: str,
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        try:
+            item = KnowledgeWriter(self.repo).withdraw(
+                knowledge_id,
+                reason=reason,
+            )
+            return envelope(
+                "withdraw_knowledge",
+                {"knowledge_item": item},
+                contains_untrusted_content=True,
+            )
+        except ValueError as exc:
+            return safe_error("withdraw_knowledge", "INVALID_ARGUMENT", str(exc))
+
+    def supersede_knowledge(
+        self,
+        knowledge_id: str,
+        replacement_knowledge_id: str,
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        try:
+            item = KnowledgeWriter(self.repo).supersede(
+                knowledge_id,
+                replacement_knowledge_id,
+                reason=reason,
+            )
+            return envelope(
+                "supersede_knowledge",
+                {"knowledge_item": item},
+                contains_untrusted_content=True,
+            )
+        except ValueError as exc:
+            return safe_error("supersede_knowledge", "INVALID_ARGUMENT", str(exc))
+
+    def synthesize_knowledge(
+        self,
+        query: str,
+        *,
+        domain: str | None = None,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        try:
+            result = KnowledgeWriter(self.repo).synthesize(
+                query,
+                domain=domain,
+                limit=limit,
+            )
+            return envelope(
+                "synthesize_knowledge",
+                {"synthesis": result},
+                contains_untrusted_content=True,
+            )
+        except (TypeError, ValueError) as exc:
+            return safe_error("synthesize_knowledge", "INVALID_ARGUMENT", str(exc))
+
+    def search_knowledge(
+        self,
+        query: str,
+        *,
+        domain: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        try:
+            items = KnowledgeWriter(self.repo).search(
+                query,
+                domain=domain,
+                limit=limit,
+            )
+            return envelope(
+                "search_knowledge",
+                {"items": items},
+                contains_untrusted_content=True,
+            )
+        except (TypeError, ValueError) as exc:
+            return safe_error("search_knowledge", "INVALID_ARGUMENT", str(exc))
+
+    # ----------------------------------------------------------------- screen
+
+    def get_video_info(self, source_id: str) -> dict[str, Any]:
+        """What tracks exist for a source: transcript, screen, or both."""
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("get_video_info", exc)
+
+        source = self.repo.get_source(source_id)
+        if not source:
+            return safe_error("get_video_info", "NOT_FOUND", "Source not found.")
+
+        observations = self.repo.observations_in_range(
+            source_id, start_ms=0, end_ms=int(source.get("duration_ms") or 0), limit=100
+        )
+        return envelope(
+            "get_video_info",
+            {
+                "source": source,
+                "has_screen_track": bool(observations),
+                "observations_sampled": len(observations),
+                "transcript_id": source.get("latest_transcript_id"),
+            },
+            contains_untrusted_content=True,
+        )
+
+    def search_screen_text(
+        self,
+        query: str,
+        source_ids: list[str],
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Search what appeared on screen, as opposed to what was said."""
+        try:
+            if not isinstance(source_ids, list) or not source_ids:
+                raise ValueError("source_ids must be a non-empty list")
+            if len(source_ids) > MAX_SEARCH_SOURCE_IDS:
+                raise ValueError(
+                    f"source_ids must contain at most {MAX_SEARCH_SOURCE_IDS} ids"
+                )
+            source_ids = [validate_id(value, "src_") for value in source_ids]
+        except ValueError as exc:
+            return _invalid("search_screen_text", exc)
+
+        try:
+            rows = self.repo.search_screen(
+                query=query,
+                source_ids=source_ids,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                limit=limit,
+            )
+        except ValueError as exc:
+            return safe_error("search_screen_text", "INVALID_ARGUMENT", str(exc))
+        return envelope(
+            "search_screen_text", {"items": rows}, contains_untrusted_content=True
+        )
+
+    def get_frame(self, source_id: str, timestamp_ms: int) -> dict[str, Any]:
+        """Return the frame at a timestamp as base64 PNG.
+
+        The image is read from local media by content hash; no host path is
+        accepted from, or returned to, the caller.
+        """
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("get_frame", exc)
+        try:
+            moment = int(timestamp_ms)
+        except (TypeError, ValueError):
+            return safe_error(
+                "get_frame", "INVALID_ARGUMENT", "timestamp_ms must be an integer."
+            )
+        if moment < 0:
+            return safe_error(
+                "get_frame", "INVALID_ARGUMENT", "timestamp_ms must not be negative."
+            )
+
+        source = self.repo.get_source(source_id)
+        if not source:
+            return safe_error("get_frame", "NOT_FOUND", "Source not found.")
+        if not source.get("has_video"):
+            return safe_error(
+                "get_frame", "NO_VIDEO_TRACK", "This source has no video track."
+            )
+
+        from base64 import b64encode
+
+        from vorquel_watch.frames import frame_at
+        from vorquel_watch.local_storage import IntegrityError, LocalStorage
+
+        storage = LocalStorage(self.settings.data_dir)
+        try:
+            media_path = storage.verify_object(source["content_sha256"])
+            png, actual_ms = frame_at(media_path, moment)
+        except IntegrityError:
+            return safe_error(
+                "get_frame", "MEDIA_UNAVAILABLE", "Local media failed verification."
+            )
+        except ValueError as exc:
+            return safe_error("get_frame", "INVALID_ARGUMENT", str(exc))
+
+        return envelope(
+            "get_frame",
+            {
+                "source_id": source_id,
+                "requested_ms": moment,
+                "actual_ms": actual_ms,
+                "mime_type": "image/png",
+                "byte_size": len(png),
+                "image_base64": b64encode(png).decode("ascii"),
+            },
+            contains_untrusted_content=True,
+        )
+
+    def get_context_at(
+        self,
+        source_id: str,
+        timestamp_ms: int,
+        window_ms: int = 15000,
+    ) -> dict[str, Any]:
+        """What was said and what was on screen at one instant."""
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("get_context_at", exc)
+        try:
+            moment = max(0, int(timestamp_ms))
+            window = max(1000, min(int(window_ms), 120000))
+        except (TypeError, ValueError):
+            return safe_error(
+                "get_context_at", "INVALID_ARGUMENT", "timestamps must be integers."
+            )
+
+        observation = self.repo.observation_at(source_id, moment)
+        blocks = (
+            self.repo.screen_text_blocks(observation["observation_id"])
+            if observation
+            else []
+        )
+        segments = self.repo.segments_in_range(
+            source_id,
+            start_ms=max(0, moment - window // 2),
+            end_ms=moment + window // 2,
+        )
+
+        return envelope(
+            "get_context_at",
+            {
+                "source_id": source_id,
+                "timestamp_ms": moment,
+                "transcript": segments,
+                "screen_observation": observation,
+                "screen_text": blocks,
+            },
+            contains_untrusted_content=True,
+        )
+
+    def get_context_range(
+        self,
+        source_id: str,
+        start_ms: int,
+        end_ms: int,
+        max_observations: int = 20,
+    ) -> dict[str, Any]:
+        """Speech and screen across a window, aligned on one timeline."""
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid("get_context_range", exc)
+        try:
+            start = max(0, int(start_ms))
+            end = max(start, int(end_ms))
+            cap = max(1, min(int(max_observations), 100))
+        except (TypeError, ValueError):
+            return safe_error(
+                "get_context_range", "INVALID_ARGUMENT", "timestamps must be integers."
+            )
+
+        observations = self.repo.observations_in_range(
+            source_id, start_ms=start, end_ms=end, limit=cap
+        )
+        segments = self.repo.segments_in_range(
+            source_id, start_ms=start, end_ms=end
+        )
+        return envelope(
+            "get_context_range",
+            {
+                "source_id": source_id,
+                "start_ms": start,
+                "end_ms": end,
+                "transcript": segments,
+                "screen_observations": observations,
+            },
+            contains_untrusted_content=True,
+        )
+
+    # ------------------------------------------------------- visual MCP V1.3
+
+    def get_visual_context_at(
+        self,
+        source_id: str,
+        timestamp_ms: int,
+        mode: str = "balanced",
+    ) -> dict[str, Any]:
+        """Return one safe VisualReviewPack near an absolute media PTS."""
+        tool = "get_visual_context_at"
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid(tool, exc)
+        if isinstance(timestamp_ms, bool) or not isinstance(timestamp_ms, int):
+            return safe_error(tool, "INVALID_TIMESTAMP", "timestamp_ms must be an integer.")
+        if timestamp_ms < 0:
+            return safe_error(
+                tool, "INVALID_TIMESTAMP", "timestamp_ms must not be negative."
+            )
+        selected_mode = _visual_mode(mode)
+        if selected_mode is None:
+            return safe_error(
+                tool,
+                "INVALID_MODE",
+                "mode must be efficient, balanced, or detailed.",
+            )
+
+        source, problem = self._visual_source(tool, source_id)
+        if problem is not None:
+            return problem
+        assert source is not None
+        duration_ms = int(source["duration_ms"])
+        if timestamp_ms >= duration_ms:
+            return safe_error(
+                tool,
+                "INVALID_TIMESTAMP",
+                "timestamp_ms must be within the source duration.",
+            )
+
+        start = max(0, timestamp_ms - VISUAL_CONTEXT_POINT_RADIUS_MS)
+        end = min(duration_ms, timestamp_ms + VISUAL_CONTEXT_POINT_RADIUS_MS)
+        if end <= start:
+            return safe_error(tool, "SOURCE_NOT_READY", "Source has no visual timeline.")
+        try:
+            media_path = self._verified_visual_media(source)
+            selection = extract_frames(
+                media_path,
+                source_id=source_id,
+                mode=selected_mode,
+                start_ms=start,
+                end_ms=end,
+                max_frames=3,
+            )
+            if not selection.frames:
+                return safe_error(
+                    tool, "SOURCE_NOT_READY", "No visual evidence is available."
+                )
+            selected = min(
+                selection.frames,
+                key=lambda frame: (
+                    abs(frame.timestamp_ms - timestamp_ms),
+                    frame.timestamp_ms,
+                    frame.frame_id,
+                ),
+            )
+            pack = build_visual_review_pack(
+                source_id=source_id,
+                selected_frame=selected,
+                evidence_reader=self.repo,
+            )
+        except IntegrityError:
+            return safe_error(
+                tool, "MEDIA_UNAVAILABLE", "Local media failed verification."
+            )
+        except Exception:
+            # MCP is a security boundary: decoder/repository/library exception
+            # details may contain host paths or internals and are never echoed.
+            return safe_error(
+                tool,
+                "VISUAL_CONTEXT_UNAVAILABLE",
+                "Visual context could not be composed safely.",
+            )
+
+        return envelope(
+            tool,
+            {
+                "source_id": source_id,
+                "timestamp_ms": timestamp_ms,
+                "mode": selected_mode.value,
+                "context": pack.as_dict(),
+                "data_trust_class": DATA_TRUST_CLASS,
+                "instruction_authority": INSTRUCTION_AUTHORITY,
+            },
+            contains_untrusted_content=True,
+        )
+
+    def get_visual_context_range(
+        self,
+        source_id: str,
+        start_ms: int,
+        end_ms: int,
+        mode: str = "balanced",
+        max_packs: int = VISUAL_CONTEXT_DEFAULT_MAX_PACKS,
+    ) -> dict[str, Any]:
+        """Return bounded VisualReviewPacks inside one absolute PTS range."""
+        tool = "get_visual_context_range"
+        try:
+            source_id = validate_id(source_id, "src_")
+        except ValueError as exc:
+            return _invalid(tool, exc)
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in (start_ms, end_ms)
+        ):
+            return safe_error(tool, "INVALID_RANGE", "range timestamps must be integers.")
+        if start_ms < 0 or end_ms <= start_ms:
+            return safe_error(
+                tool,
+                "INVALID_RANGE",
+                "start_ms must be non-negative and end_ms must be greater.",
+            )
+        if end_ms - start_ms > VISUAL_CONTEXT_MAX_RANGE_MS:
+            return safe_error(
+                tool,
+                "RANGE_TOO_LARGE",
+                f"range must not exceed {VISUAL_CONTEXT_MAX_RANGE_MS} ms.",
+            )
+        if isinstance(max_packs, bool) or not isinstance(max_packs, int):
+            return safe_error(tool, "INVALID_ARGUMENT", "max_packs must be an integer.")
+        if max_packs > VISUAL_CONTEXT_MAX_PACKS:
+            return safe_error(
+                tool,
+                "TOO_MANY_PACKS",
+                f"max_packs must not exceed {VISUAL_CONTEXT_MAX_PACKS}.",
+            )
+        if max_packs < 2:
+            return safe_error(
+                tool,
+                "INVALID_ARGUMENT",
+                "max_packs must allow first and last range coverage.",
+            )
+        selected_mode = _visual_mode(mode)
+        if selected_mode is None:
+            return safe_error(
+                tool,
+                "INVALID_MODE",
+                "mode must be efficient, balanced, or detailed.",
+            )
+
+        source, problem = self._visual_source(tool, source_id)
+        if problem is not None:
+            return problem
+        assert source is not None
+        duration_ms = int(source["duration_ms"])
+        if end_ms > duration_ms:
+            return safe_error(
+                tool, "INVALID_RANGE", "range must be within the source duration."
+            )
+
+        try:
+            media_path = self._verified_visual_media(source)
+            selection = extract_frames(
+                media_path,
+                source_id=source_id,
+                mode=selected_mode,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                max_frames=max_packs,
+            )
+            packs = build_visual_review_packs(
+                source_id=source_id,
+                selected_frames=selection.frames,
+                evidence_reader=self.repo,
+                start_ms=start_ms,
+                end_ms=end_ms,
+            )
+        except IntegrityError:
+            return safe_error(
+                tool, "MEDIA_UNAVAILABLE", "Local media failed verification."
+            )
+        except Exception:
+            return safe_error(
+                tool,
+                "VISUAL_CONTEXT_UNAVAILABLE",
+                "Visual context could not be composed safely.",
+            )
+
+        return envelope(
+            tool,
+            {
+                "source_id": source_id,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "mode": selected_mode.value,
+                "pack_count": len(packs),
+                "packs": [pack.as_dict() for pack in packs],
+                "data_trust_class": DATA_TRUST_CLASS,
+                "instruction_authority": INSTRUCTION_AUTHORITY,
+            },
+            contains_untrusted_content=True,
+        )
+
+    def _visual_source(
+        self, tool: str, source_id: str
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        try:
+            source = self.repo.get_source(source_id)
+        except Exception:
+            return None, safe_error(
+                tool,
+                "VISUAL_CONTEXT_UNAVAILABLE",
+                "Visual source metadata could not be read safely.",
+            )
+        if not source:
+            return None, safe_error(tool, "SOURCE_NOT_FOUND", "Source not found.")
+        if (
+            source.get("ingest_status") != "READY"
+            or not source.get("has_video")
+            or isinstance(source.get("duration_ms"), bool)
+            or not isinstance(source.get("duration_ms"), int)
+            or int(source["duration_ms"]) <= 0
+        ):
+            return None, safe_error(
+                tool, "SOURCE_NOT_READY", "Source has no ready visual evidence."
+            )
+        job_id = source.get("latest_successful_job_id")
+        try:
+            job = self.repo.get_job(job_id) if isinstance(job_id, str) else None
+        except Exception:
+            return None, safe_error(
+                tool,
+                "VISUAL_CONTEXT_UNAVAILABLE",
+                "Visual source status could not be read safely.",
+            )
+        if (
+            not job
+            or job.get("status") != "SUCCEEDED"
+            or job.get("source_id") != source_id
+        ):
+            return None, safe_error(
+                tool, "SOURCE_NOT_READY", "Source analysis is not complete."
+            )
+        return source, None
+
+    def _verified_visual_media(self, source: dict[str, Any]) -> Path:
+        storage = LocalStorage(self.settings.data_dir)
+        return storage.verify_object(str(source["content_sha256"]))
+
     def get_artifact(self, artifact_id: str) -> dict[str, Any]:
+        try:
+            artifact_id = validate_id(artifact_id, "art_")
+        except ValueError as exc:
+            return _invalid("get_artifact", exc)
+
         artifact = self.repo.get_artifact(artifact_id)
         if not artifact:
             return safe_error(

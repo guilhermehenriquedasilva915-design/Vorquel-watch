@@ -16,7 +16,13 @@ dependencies = [
 transcribe = [
   "faster-whisper==1.2.1",
 ]
-
+# Screen pipeline. The frame timeline, sampling and change detection need
+# nothing beyond PyAV and numpy, which transcribe already brings; only OCR
+# adds a dependency. Kept as its own extra so a transcript-only install stays
+# small.
+screen = [
+  "rapidocr==3.9.2",
+]
 [project.scripts]
 vorquel-watch = "vorquel_watch.cli:main"
 vorquel-watch-mcp = "vorquel_watch.mcp_server:main"

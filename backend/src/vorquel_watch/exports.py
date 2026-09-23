@@ -22,8 +22,12 @@ _FORMATS = {
 def _all_segments(
     repo: WatchRepository,
     transcript_id: str,
+    *,
+    max_text_bytes: int,
+    max_segments: int,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    text_bytes = 0
     cursor = None
     while True:
         page = repo.get_transcript_segments(
@@ -32,7 +36,16 @@ def _all_segments(
             limit=200,
             include_words=False,
         )
-        rows.extend(page["items"])
+        page_rows = page["items"]
+        if len(rows) + len(page_rows) > max_segments:
+            raise ValueError("export exceeds configured segment limit")
+        text_bytes += sum(
+            len(str(row.get("effective_text") or "").encode("utf-8"))
+            for row in page_rows
+        )
+        if text_bytes > max_text_bytes:
+            raise ValueError("export exceeds configured text limit")
+        rows.extend(page_rows)
         cursor = page["next_cursor"]
         if not cursor:
             return rows
@@ -114,8 +127,15 @@ def create_export(
     if not transcript:
         raise ValueError("transcript not found")
 
-    rows = _all_segments(repo, transcript_id)
+    rows = _all_segments(
+        repo,
+        transcript_id,
+        max_text_bytes=settings.max_transcript_text_bytes,
+        max_segments=settings.max_transcript_segments,
+    )
     content = _render(normalized, transcript, rows)
+    if len(content) > settings.max_export_bytes:
+        raise ValueError("export exceeds configured byte limit")
     artifact_type, suffix, mime = _FORMATS[normalized]
     artifact_id = new_id("art_")
 

@@ -17,14 +17,26 @@ def _safe_filename(name: str) -> str:
     return cleaned[:200] or "media"
 
 
-def ingest_local_file(path: str, settings: Settings) -> dict:
-    """Ingest from the local control plane, never from an MCP tool."""
-    source_path = Path(path).expanduser().resolve(strict=True)
+def _register(
+    source_path: Path,
+    settings: Settings,
+    *,
+    external_metadata: dict,
+) -> dict:
+    """Validate, hash, store and register a local media file.
 
+    V1 deliberately has one ingest route: a user-selected local file. URL
+    fetching remains deferred to V1.1 and is not part of the executable
+    control plane.
+    """
     content_sha256, byte_size, probe = validate_and_hash(
         source_path,
         max_source_bytes=settings.max_source_bytes,
         max_duration_ms=settings.max_duration_ms,
+        max_video_width=settings.max_video_width,
+        max_video_height=settings.max_video_height,
+        max_audio_sample_rate=settings.max_audio_sample_rate,
+        max_audio_channels=settings.max_audio_channels,
     )
 
     repo = WatchRepository(settings)
@@ -54,9 +66,7 @@ def ingest_local_file(path: str, settings: Settings) -> dict:
         "has_audio": probe.has_audio,
         "video_stream_count": probe.video_stream_count,
         "audio_stream_count": probe.audio_stream_count,
-        "external_metadata": {
-            "original_filename": _safe_filename(source_path.name),
-        },
+        "external_metadata": external_metadata,
         "security_policy_version": "source-guard/1",
         "data_trust_class": "UNTRUSTED_MEDIA",
         "instruction_authority": "NONE",
@@ -68,3 +78,14 @@ def ingest_local_file(path: str, settings: Settings) -> dict:
         "duration_ms": created["duration_ms"],
         "source_kind": created["source_kind"],
     }
+
+
+def ingest_local_file(path: str, settings: Settings) -> dict:
+    """Ingest from the local control plane, never from an MCP tool."""
+    source_path = Path(path).expanduser().resolve(strict=True)
+    return _register(
+        source_path,
+        settings,
+        external_metadata={"original_filename": _safe_filename(source_path.name)},
+    )
+
