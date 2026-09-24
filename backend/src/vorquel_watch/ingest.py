@@ -89,3 +89,30 @@ def ingest_local_file(path: str, settings: Settings) -> dict:
         external_metadata={"original_filename": _safe_filename(source_path.name)},
     )
 
+
+def ingest_uploaded_file(
+    path: str | Path,
+    settings: Settings,
+    *,
+    original_filename: str | None = None,
+) -> dict:
+    """Ingest a file the remote API has already received and written to disk.
+
+    Deliberately the same registration path as a local ingest: the same probe,
+    the same container/codec allowlists, the same limits, the same
+    content-addressed store and the same checksum reuse. Arriving over the
+    network buys a source no additional trust.
+
+    `original_filename` is attacker-controlled input from an upload header. It is
+    recorded as metadata only, after the same cleaning a local name gets, and is
+    never used to build a path: the object is filed under its digest.
+    """
+    source_path = Path(path).expanduser().resolve(strict=True)
+    return _register(
+        source_path,
+        settings,
+        external_metadata={
+            "original_filename": _safe_filename(original_filename or source_path.name),
+            "ingest_origin": "REMOTE_UPLOAD",
+        },
+    )

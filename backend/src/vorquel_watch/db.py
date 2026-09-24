@@ -272,6 +272,44 @@ class WatchRepository:
         )
         return result.data[0] if result.data else None
 
+    def list_jobs(
+        self,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        """Recent jobs, newest first.
+
+        Read-only, and projected through the same column list get_job uses, so
+        the lease and worker columns stay internal: a remote caller has no need
+        to know which worker holds a job, and worker_id is deliberately opaque
+        anyway.
+        """
+        limit = _clamp_limit(limit, 100)
+        offset = _decode_cursor(cursor)
+
+        query = (
+            self.client.table("processing_jobs")
+            .select(_JOB_MCP_COLUMNS)
+            .order("created_at", desc=True)
+        )
+        if status:
+            normalized = status.strip().upper()
+            allowed = {"QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"}
+            if normalized not in allowed:
+                raise ValueError("invalid status")
+            query = query.eq("status", normalized)
+
+        result = query.range(offset, offset + limit - 1).execute()
+        rows = result.data or []
+        return {
+            "items": rows,
+            "next_cursor": (
+                _encode_cursor(offset + len(rows)) if len(rows) == limit else None
+            ),
+        }
+
     def claim_next_job(
         self,
         worker_id: str,
