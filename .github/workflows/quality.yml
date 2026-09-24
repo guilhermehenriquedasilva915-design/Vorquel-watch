@@ -71,6 +71,21 @@ jobs:
           python -c "import av, faster_whisper, vorquel_watch.mcp_server"
           python -m vorquel_watch.cli --help
 
+      # The remote API and worker run on Linux on the VPS, so Linux is the
+      # platform that has to prove they import and that the CLI exposes the
+      # remote commands. Windows-first must not become Windows-only here.
+      - name: Install remote extra
+        run: python -m pip install -e "backend[remote]"
+
+      - name: Remote API must import and expose its commands on Linux
+        run: |
+          python -c "import vorquel_watch.remote_api, vorquel_watch.remote_client, vorquel_watch.remote_auth"
+          python -m vorquel_watch.cli remote --help
+          python -m vorquel_watch.cli remote upload --help
+
+      - name: Remote API must refuse to start without a token
+        run: python scripts/ci/check_remote_api.py
+
       - name: Dependency check
         run: python -m pip check
 
@@ -144,7 +159,7 @@ jobs:
 
       - name: Lock is in sync with every V1 runtime extra
         run: |
-          python -m piptools compile --generate-hashes --strip-extras --extra screen --extra transcribe --quiet --output-file expected.lock backend/pyproject.toml
+          python -m piptools compile --generate-hashes --strip-extras --extra screen --extra transcribe --extra remote --quiet --output-file expected.lock backend/pyproject.toml
           python scripts/ci/check_lock.py backend/requirements.lock expected.lock
 
       - name: Vulnerability audit of the locked set

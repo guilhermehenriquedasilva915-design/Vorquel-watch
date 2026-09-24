@@ -29,6 +29,7 @@ safe visual-context retrieval. URL ingest remains deferred.
 | Reviewed knowledge store | Candidate → human review → ACTIVE item → FTS/synthesis validated live |
 | Security and database integrity | Complete, verified against the live project |
 | Long-video resume | Job-level recovery only; no mid-job resume |
+| Remote Processing V1 | Upload to a VPS, disconnect, query status later; loopback + SSH tunnel, systemd |
 | STANDARD / SPEAKERS | Not implemented |
 
 A 35.3 second real video has been processed through ingest, transcription,
@@ -167,6 +168,8 @@ before touching `pyproject.toml`.
 | `docs/adr/0007-visual-review-pack-v1.md` | Read-only multimodal evidence compositor |
 | `docs/adr/0008-visual-context-mcp-v1.md` | Read-only Visual Context MCP V1.3 contract |
 | `docs/acceptance/real-visual-context-e2e-v1.md` | Real Visual Context E2E V1 evidence and verdict |
+| `docs/adr/0009-remote-processing-v1.md` | Remote Processing V1 transport, auth and deployment |
+| `docs/runbook/oracle-vps-remote-processing.md` | Exact VPS deployment and operation commands |
 | `docs/media-sandbox.md` | What media isolation guarantees, and what it does not |
 | `docs/dependencies.md` | Lock file, audit, SBOM, media stack CVE position |
 | `docs/threat-model/v1.md` | Threats and the status of each control |

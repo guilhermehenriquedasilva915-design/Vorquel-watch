@@ -1,0 +1,62 @@
+[Unit]
+# The persistent worker. This is what makes the notebook disposable: it claims
+# queued jobs, leases them, heartbeats, and finishes them whether or not anyone
+# is connected.
+#
+# It is deliberately independent of the API unit. The API only writes rows; if
+# the API is down, queued work still completes. If the worker is down, uploads
+# still queue.
+Description=Vorquel Watch processing worker
+Documentation=https://github.com/guilhermehenriquedasilva915-design/Vorquel-watch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vorquel
+Group=vorquel
+
+EnvironmentFile=/etc/vorquel-watch/watch.env
+
+Environment=VORQUEL_WATCH_DATA_DIR=/var/lib/vorquel-watch
+Environment=PYTHONUNBUFFERED=1
+
+WorkingDirectory=/opt/vorquel-watch
+ExecStart=/opt/vorquel-watch/.venv/bin/vorquel-watch-worker
+
+# Always come back. A reboot, an OOM kill or an unhandled fault must not leave
+# the queue unattended: on restart, claim_next_job reclaims any RUNNING job
+# whose lease expired, and transcription resumes at its last committed chunk.
+Restart=always
+RestartSec=10
+
+# --- hardening -------------------------------------------------------------
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+ReadWritePaths=/var/lib/vorquel-watch
+
+# Transcription and OCR are the expensive part of the product. These ceilings
+# are the starting point for a small Oracle instance; raise MemoryMax before
+# raising concurrency, and measure with `systemctl status` rather than guessing.
+MemoryMax=6G
+TasksMax=512
+CPUWeight=100
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vorquel-watch-worker
+
+[Install]
+WantedBy=multi-user.target

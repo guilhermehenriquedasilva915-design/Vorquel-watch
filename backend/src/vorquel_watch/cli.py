@@ -21,6 +21,12 @@ from vorquel_watch.knowledge import KnowledgeWriter
 from vorquel_watch.local_storage import LocalStorage
 from vorquel_watch.logging_utils import configure_logging
 from vorquel_watch.obsidian_export import export_to_obsidian
+from vorquel_watch import remote_auth
+from vorquel_watch.remote_client import (
+    RemoteClientError,
+    build_client,
+    resolve_base_url,
+)
 from vorquel_watch.obsidian_setup import setup_obsidian_graph
 from vorquel_watch.service import WatchService
 from vorquel_watch.worker import run_worker
@@ -424,6 +430,122 @@ def cmd_brain_export_obsidian(args: argparse.Namespace) -> int:
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
+def _remote_client(args: argparse.Namespace):
+    """Build a client for the remote host.
+
+    The notebook needs no Supabase credential for any remote command, so
+    Settings.from_env() is deliberately not called here: an unconfigured laptop
+    can still upload and poll.
+    """
+    return build_client(
+        default_data_dir(),
+        base_url=getattr(args, "url", None),
+        token=getattr(args, "token", None),
+    )
+
+
+def _print_remote(payload: dict) -> int:
+    """Print a server envelope and translate it into an exit code."""
+    status = payload.pop("_http_status", 200)
+    data = payload.get("data")
+    failed = isinstance(data, dict) and data.get("ok") is False
+    stream = sys.stderr if failed else sys.stdout
+    print(json.dumps(payload, ensure_ascii=False, indent=2), file=stream)
+    if failed or status >= 400:
+        return 1
+    return 0
+
+
+def cmd_remote_configure(args: argparse.Namespace) -> int:
+    """Store the remote API token in the OS credential store.
+
+    The token is a secret, so it gets the same treatment as the Supabase
+    credential: OS-encrypted, never a plaintext file, and refused outright where
+    OS-backed storage is unavailable.
+    """
+    if not credentials.is_supported():
+        print(
+            "OS-backed credential storage is unavailable on this platform. "
+            f"Set {remote_auth.TOKEN_ENV_VAR} in the environment instead.",
+            file=sys.stderr,
+        )
+        return 2
+
+    token = getpass.getpass("Remote API token: ").strip()
+    if len(token) < remote_auth.MIN_TOKEN_LENGTH:
+        print(
+            "Refusing to store a token shorter than "
+            f"{remote_auth.MIN_TOKEN_LENGTH} characters.",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        credentials.store_secret(
+            default_data_dir(), remote_auth.CLIENT_TOKEN_SECRET_NAME, token
+        )
+    except credentials.CredentialError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    print(
+        json.dumps(
+            {"stored": True, "base_url": resolve_base_url(getattr(args, "url", None))},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_remote_upload(args: argparse.Namespace) -> int:
+    try:
+        client = _remote_client(args)
+        payload = client.upload(
+            Path(args.path),
+            skip_if_held=not args.force_upload,
+        )
+    except RemoteClientError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    except FileNotFoundError:
+        print(
+            json.dumps({"error": "File not found."}, ensure_ascii=False, indent=2),
+            file=sys.stderr,
+        )
+        return 2
+    return _print_remote(payload)
+
+
+def cmd_remote_status(args: argparse.Namespace) -> int:
+    try:
+        payload = _remote_client(args).get_job(args.job_id)
+    except RemoteClientError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    return _print_remote(payload)
+
+
+def cmd_remote_list(args: argparse.Namespace) -> int:
+    try:
+        payload = _remote_client(args).list_jobs(
+            limit=args.limit, status=args.status, cursor=args.cursor
+        )
+    except RemoteClientError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    return _print_remote(payload)
+
+
+def cmd_remote_cancel(args: argparse.Namespace) -> int:
+    try:
+        payload = _remote_client(args).cancel_job(args.job_id)
+    except RemoteClientError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
+    return _print_remote(payload)
+
+
 def cmd_doctor(_: argparse.Namespace) -> int:
     data_dir = default_data_dir()
     checks: dict[str, object] = {
@@ -677,6 +799,58 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--limit", type=int, default=20)
     search.set_defaults(func=cmd_brain_search)
 
+
+    remote = sub.add_parser(
+        "remote",
+        help="Work with a remote Vorquel Watch host that processes on its own.",
+    )
+    remote.add_argument(
+        "--url",
+        help="Base URL of the remote host. Defaults to the tunnelled loopback address.",
+    )
+    remote.add_argument(
+        "--token",
+        help="API token. Prefer the credential store or the environment over this.",
+    )
+    remote_sub = remote.add_subparsers(dest="remote_command", required=True)
+
+    remote_configure = remote_sub.add_parser(
+        "configure",
+        help="Store the remote API token in the OS credential store.",
+    )
+    remote_configure.set_defaults(func=cmd_remote_configure)
+
+    remote_upload = remote_sub.add_parser(
+        "upload",
+        help="Send a recording for remote processing and return its identifiers.",
+    )
+    remote_upload.add_argument("path")
+    remote_upload.add_argument(
+        "--force-upload",
+        action="store_true",
+        help="Send the bytes even when the host already holds this content.",
+    )
+    remote_upload.set_defaults(func=cmd_remote_upload)
+
+    remote_status = remote_sub.add_parser(
+        "status", help="Show one remote job."
+    )
+    remote_status.add_argument("job_id")
+    remote_status.set_defaults(func=cmd_remote_status)
+
+    remote_list = remote_sub.add_parser(
+        "list", help="List recent remote jobs."
+    )
+    remote_list.add_argument("--limit", type=int, default=20)
+    remote_list.add_argument("--status")
+    remote_list.add_argument("--cursor")
+    remote_list.set_defaults(func=cmd_remote_list)
+
+    remote_cancel = remote_sub.add_parser(
+        "cancel", help="Cancel a queued or running remote job."
+    )
+    remote_cancel.add_argument("job_id")
+    remote_cancel.set_defaults(func=cmd_remote_cancel)
 
     doctor = sub.add_parser("doctor")
     doctor.set_defaults(func=cmd_doctor)

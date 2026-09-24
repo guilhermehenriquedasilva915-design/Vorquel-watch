@@ -23,10 +23,21 @@ transcribe = [
 screen = [
   "rapidocr==3.9.2",
 ]
+# Remote Processing V1 (ADR 0009). These are already in the resolved dependency
+# graph as transitive requirements of mcp; declaring them here makes the remote
+# API's actual imports explicit rather than relying on another package to keep
+# pulling them. Pinned to the versions already in requirements.lock, so the
+# resolution does not move.
+remote = [
+  "starlette==1.6.0",
+  "uvicorn==0.53.0",
+  "httpx==0.28.1",
+]
 [project.scripts]
 vorquel-watch = "vorquel_watch.cli:main"
 vorquel-watch-mcp = "vorquel_watch.mcp_server:main"
 vorquel-watch-worker = "vorquel_watch.worker:main"
+vorquel-watch-api = "vorquel_watch.remote_api:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vorquel_watch"]
