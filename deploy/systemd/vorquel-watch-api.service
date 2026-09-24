@@ -1,0 +1,68 @@
+[Unit]
+# Remote Processing V1 upload/status API (ADR 0009).
+#
+# Binds loopback only. The notebook reaches it through an SSH tunnel, so the VPS
+# needs no new public port and no certificate. Do not set
+# VORQUEL_WATCH_REMOTE_HOST to 0.0.0.0 without first deciding how the port is
+# firewalled and terminated.
+Description=Vorquel Watch remote processing API
+Documentation=https://github.com/guilhermehenriquedasilva915-design/Vorquel-watch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vorquel
+Group=vorquel
+
+# The secret and the API token live here, root-owned and 0600. Never in this
+# unit file: unit files end up in git and in support tickets.
+EnvironmentFile=/etc/vorquel-watch/watch.env
+
+Environment=VORQUEL_WATCH_DATA_DIR=/var/lib/vorquel-watch
+Environment=VORQUEL_WATCH_REMOTE_HOST=127.0.0.1
+Environment=VORQUEL_WATCH_REMOTE_PORT=8787
+Environment=PYTHONUNBUFFERED=1
+
+WorkingDirectory=/opt/vorquel-watch
+ExecStart=/opt/vorquel-watch/.venv/bin/vorquel-watch-api
+
+Restart=always
+RestartSec=5
+
+# --- hardening -------------------------------------------------------------
+# The API parses untrusted bytes (in a child process) and writes large files.
+# Everything it does not need is taken away.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# The only writable path. ProtectSystem=strict makes everything else read-only,
+# so a path traversal has nowhere to land even if one existed.
+ReadWritePaths=/var/lib/vorquel-watch
+
+# Resource ceilings. SECURITY.md lists OS-level confinement as an open gap;
+# this closes the part of it that applies to these two units.
+MemoryMax=2G
+TasksMax=256
+CPUWeight=50
+
+# Structured JSON events go to the journal. safe_fields() already drops
+# secrets, tokens, paths, URLs and transcript text before they get here.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vorquel-watch-api
+
+[Install]
+WantedBy=multi-user.target
